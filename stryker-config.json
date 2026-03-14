@@ -1,0 +1,18 @@
+{
+  "stryker-config": {
+    "project": "Numetrics.csproj",
+    "test-projects": [
+      "tests/Numetrics.Tests/Numetrics.Tests.csproj"
+    ],
+    "reporters": [
+      "html",
+      "progress"
+    ],
+    "mutation-level": "Standard",
+    "threshold": {
+      "high": 80,
+      "low": 60,
+      "break": 0
+    }
+  }
+}
