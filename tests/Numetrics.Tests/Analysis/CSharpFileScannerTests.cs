@@ -51,7 +51,7 @@ public class CSharpFileScannerTests
     }
 
     [Fact]
-    public void AnalyzeSyntaxTrees_UsingDirectives_ExtractedAsUsings()
+    public void AnalyzeSyntaxTrees_UsingDirectives_StoredForResolutionContext()
     {
         const string code = """
             using MyApp.Models;
@@ -107,7 +107,7 @@ public class CSharpFileScannerTests
     }
 
     [Fact]
-    public void AnalyzeSyntaxTrees_GlobalUsingDirective_IsExtracted()
+    public void AnalyzeSyntaxTrees_GlobalUsingDirective_IsIncludedInTypeUsingDirectives()
     {
         const string code = """
             global using MyApp.Models;
@@ -117,9 +117,11 @@ public class CSharpFileScannerTests
             """;
 
         var trees = new[] { (CSharpSyntaxTree.ParseText(code), "TestAssembly") };
-        var (types, globalUsings) = CSharpFileScanner.AnalyzeSyntaxTreesWithGlobalUsings(trees);
+        var types = CSharpFileScanner.AnalyzeSyntaxTrees(trees);
 
-        globalUsings.ShouldContain("MyApp.Models");
+        // Global usings are folded into each type's UsingDirectives for resolution.
+        var type = types.ShouldHaveSingleItem();
+        type.UsingDirectives.ShouldContain("MyApp.Models");
     }
 
     [Fact]
@@ -197,7 +199,7 @@ public class CSharpFileScannerTests
     }
 
     [Fact]
-    public void AnalyzeSyntaxTrees_StaticUsing_IsNotExtracted()
+    public void AnalyzeSyntaxTrees_StaticUsing_IsNotInUsingDirectives()
     {
         const string code = """
             using static System.Math;
@@ -212,28 +214,12 @@ public class CSharpFileScannerTests
     }
 
     [Fact]
-    public void AnalyzeSyntaxTrees_AliasUsing_IsNotExtracted()
+    public void AnalyzeSyntaxTrees_AliasUsing_IsNotInUsingDirectives()
     {
         const string code = """
             using MyAlias = System.Collections.Generic;
             namespace MyApp;
             class MyType { }
-            """;
-
-        var types = ScanCode(code);
-
-        var type = types.ShouldHaveSingleItem();
-        type.UsingDirectives.ShouldBeEmpty();
-    }
-
-    [Fact]
-    public void AnalyzeSyntaxTrees_GlobalUsing_IsNotInTypeUsingDirectives()
-    {
-        const string code = """
-            global using MyApp.Models;
-
-            namespace MyApp.Services;
-            class ServiceA { }
             """;
 
         var types = ScanCode(code);
@@ -262,8 +248,6 @@ public class CSharpFileScannerTests
     [Fact]
     public void AnalyzeSyntaxTrees_FileScopedNamespaceWithBothFileAndNamespaceLevelUsings_AllUsingsIncluded()
     {
-        // File-level using AND a using inside the file-scoped namespace declaration.
-        // Both must end up in the type's UsingDirectives (Concat, not Except).
         const string code = """
             using MyApp.Models;
 
@@ -279,6 +263,149 @@ public class CSharpFileScannerTests
         type.UsingDirectives.ShouldContain("MyApp.Logging");
     }
 
+    // ── ReferencedTypeNames (semantic walker) tests ────────────────────────────
+    [Fact]
+    public void AnalyzeSyntaxTrees_ClassWithNoMembers_ReferencedTypeNamesIsEmpty()
+    {
+        const string code = """
+            namespace MyApp;
+            class Empty { }
+            """;
+
+        var types = ScanCode(code);
+
+        types.ShouldHaveSingleItem().ReferencedTypeNames.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void AnalyzeSyntaxTrees_FieldDeclaration_TypeNameCollected()
+    {
+        const string code = """
+            namespace MyApp.Services;
+            class ServiceA
+            {
+                private ModelA field;
+            }
+            """;
+
+        var types = ScanCode(code);
+
+        // Without the model type in the same compilation the semantic model
+        // cannot resolve "ModelA" — it falls back to the syntactic name.
+        types.ShouldHaveSingleItem().ReferencedTypeNames.ShouldContain("ModelA");
+    }
+
+    [Fact]
+    public void AnalyzeSyntaxTrees_MethodParameter_TypeNameCollected()
+    {
+        const string code = """
+            namespace MyApp.Services;
+            class ServiceA
+            {
+                public void Process(ModelA model) { }
+            }
+            """;
+
+        var types = ScanCode(code);
+
+        types.ShouldHaveSingleItem().ReferencedTypeNames.ShouldContain("ModelA");
+    }
+
+    [Fact]
+    public void AnalyzeSyntaxTrees_MethodReturnType_TypeNameCollected()
+    {
+        const string code = """
+            namespace MyApp.Services;
+            class ServiceA
+            {
+                public ModelA Get() => null;
+            }
+            """;
+
+        var types = ScanCode(code);
+
+        types.ShouldHaveSingleItem().ReferencedTypeNames.ShouldContain("ModelA");
+    }
+
+    [Fact]
+    public void AnalyzeSyntaxTrees_BaseClass_TypeNameCollected()
+    {
+        const string code = """
+            namespace MyApp.Services;
+            class ServiceA : BaseService { }
+            """;
+
+        var types = ScanCode(code);
+
+        types.ShouldHaveSingleItem().ReferencedTypeNames.ShouldContain("BaseService");
+    }
+
+    [Fact]
+    public void AnalyzeSyntaxTrees_QualifiedTypeName_CollectedAsQualifiedString()
+    {
+        const string code = """
+            namespace MyApp.Services;
+            class ServiceA
+            {
+                private MyApp.Models.ModelA field;
+            }
+            """;
+
+        var types = ScanCode(code);
+
+        // With no ModelA in the compilation the semantic model can't resolve it,
+        // so the qualified syntax string is recorded as the fallback.
+        types.ShouldHaveSingleItem().ReferencedTypeNames.ShouldContain("MyApp.Models.ModelA");
+    }
+
+    [Fact]
+    public void AnalyzeSyntaxTrees_GenericFieldType_OuterAndArgumentTypesCollected()
+    {
+        const string code = """
+            using System.Collections.Generic;
+            namespace MyApp.Services;
+            class ServiceA
+            {
+                private List<ModelA> list;
+            }
+            """;
+
+        var types = ScanCode(code);
+
+        var referencedNames = types.ShouldHaveSingleItem().ReferencedTypeNames;
+        referencedNames.ShouldContain("ModelA");
+    }
+
+    [Fact]
+    public void AnalyzeSyntaxTrees_CrossFileSemanticResolution_ProducesFullyQualifiedName()
+    {
+        // When both types are compiled together the semantic model can resolve
+        // the simple name "ModelA" to its fully-qualified "MyApp.Models.ModelA".
+        const string modelCode = """
+            namespace MyApp.Models;
+            class ModelA { }
+            """;
+
+        const string serviceCode = """
+            using MyApp.Models;
+            namespace MyApp.Services;
+            class ServiceA
+            {
+                private ModelA field;
+            }
+            """;
+
+        var trees = new[]
+        {
+            (CSharpSyntaxTree.ParseText(modelCode), "TestAssembly"),
+            (CSharpSyntaxTree.ParseText(serviceCode), "TestAssembly"),
+        };
+        var types = CSharpFileScanner.AnalyzeSyntaxTrees(trees);
+
+        var serviceA = types.Single(t => t.Name == "ServiceA");
+        serviceA.ReferencedTypeNames.ShouldContain("MyApp.Models.ModelA");
+    }
+
     [Fact]
     public void ScanDirectory_OnlyFindsCSFiles_IgnoresOtherExtensions()
     {
@@ -289,7 +416,7 @@ public class CSharpFileScannerTests
             File.WriteAllText(Path.Combine(tempDir, "Valid.cs"), "namespace MyApp; class MyType { }");
             File.WriteAllText(Path.Combine(tempDir, "Other.txt"), "namespace OtherApp; class OtherType { }");
 
-            var (types, _) = CSharpFileScanner.ScanDirectory(tempDir);
+            var types = CSharpFileScanner.ScanDirectory(tempDir);
 
             types.ShouldHaveSingleItem().Name.ShouldBe("MyType");
         }
@@ -312,7 +439,7 @@ public class CSharpFileScannerTests
                 Path.Combine(projectDir, "MyProject.csproj"),
                 "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
 
-            var (types, _) = CSharpFileScanner.ScanDirectory(tempDir);
+            var types = CSharpFileScanner.ScanDirectory(tempDir);
 
             types.ShouldHaveSingleItem().AssemblyName.ShouldBe("MyProject");
         }

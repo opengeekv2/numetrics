@@ -48,10 +48,13 @@ internal static class MetricsCalculator
 
             efferentDeps[key] = deps;
         }
+
         // Build afferent coupling map: packageKey → set of keys that depend on it
         var afferentDeps = new Dictionary<string, HashSet<string>>();
         foreach (var key in grouped.Select(g => g.Key))
+        {
             afferentDeps[key] = new HashSet<string>();
+        }
 
         foreach (var entry in efferentDeps)
         {
@@ -162,10 +165,14 @@ internal static class MetricsCalculator
                 // avoids counting a dependency for every package that happens to
                 // contain a type with the same name.
                 if (!string.IsNullOrEmpty(currentNamespace))
+                {
                     TryAddDep($"{currentNamespace}.{typeName}", currentKey, qualifiedTypeToKey, deps);
+                }
 
                 foreach (var ns in usingDirectives)
+                {
                     TryAddDep($"{ns}.{typeName}", currentKey, qualifiedTypeToKey, deps);
+                }
             }
         }
     }
@@ -177,7 +184,9 @@ internal static class MetricsCalculator
         HashSet<string> deps)
     {
         if (qualifiedTypeToKey.TryGetValue(qualifiedName, out var depKey) && depKey != currentKey)
+        {
             deps.Add(depKey);
+        }
     }
 
     private static Dictionary<string, IReadOnlyList<IReadOnlyList<string>>> BuildCyclesByNode(
@@ -203,4 +212,3 @@ internal static class MetricsCalculator
             kv => (IReadOnlyList<IReadOnlyList<string>>)kv.Value);
     }
 }
-

@@ -7,10 +7,7 @@ public class MetricsCalculatorTests
     [Fact]
     public void ComputeNamespaceMetrics_SingleConcreteType_ReturnsCorrectMetrics()
     {
-        var types = new[]
-        {
-            new TypeDeclarationInfo("MyType", "MyApp", "MyApp", false, new HashSet<string>()),
-        };
+        var types = new[] { MakeType("MyType", "MyApp", "MyApp") };
 
         var metrics = MetricsCalculator.ComputeNamespaceMetrics(types);
 
@@ -28,10 +25,12 @@ public class MetricsCalculatorTests
     [Fact]
     public void ComputeNamespaceMetrics_TwoNamespacesWithDependency_ComputesCouplings()
     {
+        // ServiceA has a field of type ModelB → fully-qualified ref produced by the
+        // semantic model is "MyApp.Models.ModelB".
         var types = new[]
         {
-            new TypeDeclarationInfo("ServiceA", "MyApp.Services", "MyApp", false, new HashSet<string> { "MyApp.Models" }),
-            new TypeDeclarationInfo("ModelB", "MyApp.Models", "MyApp", false, new HashSet<string>()),
+            MakeType("ServiceA", "MyApp.Services", "MyApp", refs: new[] { "MyApp.Models.ModelB" }),
+            MakeType("ModelB",   "MyApp.Models",   "MyApp"),
         };
 
         var metrics = MetricsCalculator.ComputeNamespaceMetrics(types);
@@ -54,8 +53,8 @@ public class MetricsCalculatorTests
     {
         var types = new[]
         {
-            new TypeDeclarationInfo("IService", "MyApp", "MyApp", true, new HashSet<string>()),
-            new TypeDeclarationInfo("ConcreteService", "MyApp", "MyApp", false, new HashSet<string>()),
+            MakeType("IService",         "MyApp", "MyApp", isAbstract: true),
+            MakeType("ConcreteService",  "MyApp", "MyApp"),
         };
 
         var metrics = MetricsCalculator.ComputeNamespaceMetrics(types);
@@ -67,11 +66,17 @@ public class MetricsCalculatorTests
     }
 
     [Fact]
-    public void ComputeNamespaceMetrics_IgnoresNonProjectNamespaceDependencies()
+    public void ComputeNamespaceMetrics_IgnoresExternalTypeDependencies()
     {
+        // Fully-qualified external type names (produced by the semantic model) that
+        // are not present in the project must not contribute to efferent coupling.
         var types = new[]
         {
-            new TypeDeclarationInfo("MyService", "MyApp", "MyApp", false, new HashSet<string> { "System.Linq", "System.Collections.Generic" }),
+            MakeType(
+                "MyService",
+                "MyApp",
+                "MyApp",
+                refs: new[] { "System.Collections.Generic.IEnumerable", "System.Linq.IQueryable" }),
         };
 
         var metrics = MetricsCalculator.ComputeNamespaceMetrics(types);
@@ -85,8 +90,8 @@ public class MetricsCalculatorTests
     {
         var types = new[]
         {
-            new TypeDeclarationInfo("IService", "MyApp", "MyApp", true, new HashSet<string>()),
-            new TypeDeclarationInfo("IRepository", "MyApp", "MyApp", true, new HashSet<string>()),
+            MakeType("IService",    "MyApp", "MyApp", isAbstract: true),
+            MakeType("IRepository", "MyApp", "MyApp", isAbstract: true),
         };
 
         var metrics = MetricsCalculator.ComputeNamespaceMetrics(types);
@@ -97,34 +102,44 @@ public class MetricsCalculatorTests
     }
 
     [Fact]
-    public void ComputeNamespaceMetrics_WithGlobalUsings_CountsAsEfferentDependencies()
+    public void ComputeNamespaceMetrics_UnresolvedTypeWithUsingDirective_CountsAsEfferentDependency()
     {
+        // When the semantic model cannot resolve a type (fallback path), the
+        // calculator uses UsingDirectives to qualify the simple name and look it up.
         var types = new[]
         {
-            new TypeDeclarationInfo("ServiceA", "MyApp.Services", "MyApp", false, new HashSet<string>()),
-            new TypeDeclarationInfo("ModelB", "MyApp.Models", "MyApp", false, new HashSet<string>()),
+            MakeType(
+                "ServiceA",
+                "MyApp.Services",
+                "MyApp",
+                refs: new[] { "ModelB" },
+                usings: new[] { "MyApp.Models" }),
+            MakeType("ModelB", "MyApp.Models", "MyApp"),
         };
-        var globalUsings = new HashSet<string> { "MyApp.Models" };
 
-        var metrics = MetricsCalculator.ComputeNamespaceMetrics(types, globalUsings);
+        var metrics = MetricsCalculator.ComputeNamespaceMetrics(types);
 
-        var servicesMetrics = metrics.Single(m => m.Name == "MyApp.Services");
-        servicesMetrics.EfferentCouplings.ShouldBe(1);
-
-        var modelsMetrics = metrics.Single(m => m.Name == "MyApp.Models");
-        modelsMetrics.AfferentCouplings.ShouldBe(1);
+        metrics.Single(m => m.Name == "MyApp.Services").EfferentCouplings.ShouldBe(1);
+        metrics.Single(m => m.Name == "MyApp.Models").AfferentCouplings.ShouldBe(1);
     }
 
     [Fact]
-    public void ComputeNamespaceMetrics_GlobalUsings_DoNotSelfReference()
+    public void ComputeNamespaceMetrics_UnresolvedTypeWithUsingDirective_DoesNotSelfReference()
     {
+        // A simple-name fallback that resolves (via UsingDirectives) to the type's
+        // own package must not count as an efferent coupling.
         var types = new[]
         {
-            new TypeDeclarationInfo("ServiceA", "MyApp.Services", "MyApp", false, new HashSet<string>()),
+            MakeType(
+                "ServiceA",
+                "MyApp.Services",
+                "MyApp",
+                refs: new[] { "ServiceB" },
+                usings: new[] { "MyApp.Services" }),
+            MakeType("ServiceB", "MyApp.Services", "MyApp"),
         };
-        var globalUsings = new HashSet<string> { "MyApp.Services" };
 
-        var metrics = MetricsCalculator.ComputeNamespaceMetrics(types, globalUsings);
+        var metrics = MetricsCalculator.ComputeNamespaceMetrics(types);
 
         var ns = metrics.ShouldHaveSingleItem();
         ns.EfferentCouplings.ShouldBe(0);
@@ -135,8 +150,8 @@ public class MetricsCalculatorTests
     {
         var types = new[]
         {
-            new TypeDeclarationInfo("ServiceA", "MyApp.Services", "MyApp.Services", false, new HashSet<string> { "MyApp.Models" }),
-            new TypeDeclarationInfo("ModelB", "MyApp.Models", "MyApp.Models", false, new HashSet<string>()),
+            MakeType("ServiceA", "MyApp.Services", "MyApp.Services", refs: new[] { "MyApp.Models.ModelB" }),
+            MakeType("ModelB",   "MyApp.Models",   "MyApp.Models"),
         };
 
         var metrics = MetricsCalculator.ComputeAssemblyMetrics(types);
@@ -155,10 +170,11 @@ public class MetricsCalculatorTests
     [Fact]
     public void ComputeAssemblyMetrics_SingleAssembly_NoCouplings()
     {
+        // Both types live in the same assembly – cross-namespace ref stays internal.
         var types = new[]
         {
-            new TypeDeclarationInfo("TypeA", "MyApp.NS1", "MyApp", false, new HashSet<string> { "MyApp.NS2" }),
-            new TypeDeclarationInfo("TypeB", "MyApp.NS2", "MyApp", false, new HashSet<string>()),
+            MakeType("TypeA", "MyApp.NS1", "MyApp", refs: new[] { "MyApp.NS2.TypeB" }),
+            MakeType("TypeB", "MyApp.NS2", "MyApp"),
         };
 
         var metrics = MetricsCalculator.ComputeAssemblyMetrics(types);
@@ -171,10 +187,7 @@ public class MetricsCalculatorTests
     [Fact]
     public void ComputeNamespaceMetrics_InstabilityIsZero_WhenNoCouplings()
     {
-        var types = new[]
-        {
-            new TypeDeclarationInfo("MyType", "MyApp", "MyApp", false, new HashSet<string>()),
-        };
+        var types = new[] { MakeType("MyType", "MyApp", "MyApp") };
 
         var metrics = MetricsCalculator.ComputeNamespaceMetrics(types);
 
@@ -187,8 +200,8 @@ public class MetricsCalculatorTests
     {
         var types = new[]
         {
-            new TypeDeclarationInfo("ServiceA", "MyApp.A", "MyApp", false, new HashSet<string> { "MyApp.B" }),
-            new TypeDeclarationInfo("ServiceB", "MyApp.B", "MyApp", false, new HashSet<string> { "MyApp.A" }),
+            MakeType("ServiceA", "MyApp.A", "MyApp", refs: new[] { "MyApp.B.ServiceB" }),
+            MakeType("ServiceB", "MyApp.B", "MyApp", refs: new[] { "MyApp.A.ServiceA" }),
         };
 
         var metrics = MetricsCalculator.ComputeNamespaceMetrics(types);
@@ -202,8 +215,8 @@ public class MetricsCalculatorTests
     {
         var types = new[]
         {
-            new TypeDeclarationInfo("IService", "MyApp", "MyApp", true, new HashSet<string>()),
-            new TypeDeclarationInfo("ConcreteService", "MyApp", "MyApp", false, new HashSet<string>()),
+            MakeType("IService",        "MyApp", "MyApp", isAbstract: true),
+            MakeType("ConcreteService", "MyApp", "MyApp"),
         };
 
         var metrics = MetricsCalculator.ComputeAssemblyMetrics(types);
@@ -214,70 +227,62 @@ public class MetricsCalculatorTests
     }
 
     [Fact]
-    public void ComputeAssemblyMetrics_WithGlobalUsings_CountsAsEfferentDependencies()
+    public void ComputeAssemblyMetrics_WithUnresolvedTypeAndUsingDirective_CountsAsEfferentDependency()
     {
         var types = new[]
         {
-            new TypeDeclarationInfo("ServiceA", "MyApp.Services", "MyApp.Services", false, new HashSet<string>()),
-            new TypeDeclarationInfo("ModelB", "MyApp.Models", "MyApp.Models", false, new HashSet<string>()),
+            MakeType(
+                "ServiceA",
+                "MyApp.Services",
+                "MyApp.Services",
+                refs: new[] { "ModelB" },
+                usings: new[] { "MyApp.Models" }),
+            MakeType("ModelB", "MyApp.Models", "MyApp.Models"),
         };
-        var globalUsings = new HashSet<string> { "MyApp.Models" };
 
-        var metrics = MetricsCalculator.ComputeAssemblyMetrics(types, globalUsings);
+        var metrics = MetricsCalculator.ComputeAssemblyMetrics(types);
 
-        var servicesMetrics = metrics.Single(m => m.Name == "MyApp.Services");
-        servicesMetrics.EfferentCouplings.ShouldBe(1);
-
-        var modelsMetrics = metrics.Single(m => m.Name == "MyApp.Models");
-        modelsMetrics.AfferentCouplings.ShouldBe(1);
+        metrics.Single(m => m.Name == "MyApp.Services").EfferentCouplings.ShouldBe(1);
+        metrics.Single(m => m.Name == "MyApp.Models").AfferentCouplings.ShouldBe(1);
     }
 
     [Fact]
     public void ComputeAssemblyMetrics_NamespaceDiffersFromAssemblyName_DependencyResolvedToAssembly()
     {
-        // When namespace names differ from assembly names, the custom usingDirectiveToKey
-        // must be used (not overwritten) to correctly map namespace usings to assembly names.
         var types = new[]
         {
-            new TypeDeclarationInfo("ServiceA", "NS.Services", "AssemblyA", false, new HashSet<string> { "NS.Models" }),
-            new TypeDeclarationInfo("ModelB", "NS.Models", "AssemblyB", false, new HashSet<string>()),
+            MakeType("ServiceA", "NS.Services", "AssemblyA", refs: new[] { "NS.Models.ModelB" }),
+            MakeType("ModelB",   "NS.Models",   "AssemblyB"),
         };
 
         var metrics = MetricsCalculator.ComputeAssemblyMetrics(types);
 
-        var servicesMetrics = metrics.Single(m => m.Name == "AssemblyA");
-        servicesMetrics.EfferentCouplings.ShouldBe(1);
-
-        var modelsMetrics = metrics.Single(m => m.Name == "AssemblyB");
-        modelsMetrics.AfferentCouplings.ShouldBe(1);
+        metrics.Single(m => m.Name == "AssemblyA").EfferentCouplings.ShouldBe(1);
+        metrics.Single(m => m.Name == "AssemblyB").AfferentCouplings.ShouldBe(1);
     }
 
     [Fact]
     public void ComputeNamespaceMetrics_TwoPackagesDependOnSamePackage_AfferentCouplingIsTwo()
     {
-        // Both NS.B and NS.C depend on NS.A → NS.A must have Ca=2.
         var types = new[]
         {
-            new TypeDeclarationInfo("TypeA", "NS.A", "Asm", false, new HashSet<string>()),
-            new TypeDeclarationInfo("TypeB", "NS.B", "Asm", false, new HashSet<string> { "NS.A" }),
-            new TypeDeclarationInfo("TypeC", "NS.C", "Asm", false, new HashSet<string> { "NS.A" }),
+            MakeType("TypeA", "NS.A", "Asm"),
+            MakeType("TypeB", "NS.B", "Asm", refs: new[] { "NS.A.TypeA" }),
+            MakeType("TypeC", "NS.C", "Asm", refs: new[] { "NS.A.TypeA" }),
         };
 
         var metrics = MetricsCalculator.ComputeNamespaceMetrics(types);
 
-        var nsA = metrics.Single(m => m.Name == "NS.A");
-        nsA.AfferentCouplings.ShouldBe(2);
+        metrics.Single(m => m.Name == "NS.A").AfferentCouplings.ShouldBe(2);
     }
 
     [Fact]
     public void ComputeNamespaceMetrics_EqualAfferentAndEfferentCouplings_InstabilityIsHalf()
     {
-        // Ce=1, Ca=1 → Instability = Ce / (Ce + Ca) = 1/2 = 0.5
-        // If Ce+Ca is computed as Ce-Ca the denominator is 0 → Infinity instead of 0.5.
         var types = new[]
         {
-            new TypeDeclarationInfo("TypeA", "NS.A", "Asm", false, new HashSet<string> { "NS.B" }),
-            new TypeDeclarationInfo("TypeB", "NS.B", "Asm", false, new HashSet<string> { "NS.A" }),
+            MakeType("TypeA", "NS.A", "Asm", refs: new[] { "NS.B.TypeB" }),
+            MakeType("TypeB", "NS.B", "Asm", refs: new[] { "NS.A.TypeA" }),
         };
 
         var metrics = MetricsCalculator.ComputeNamespaceMetrics(types);
@@ -291,13 +296,11 @@ public class MetricsCalculatorTests
     [Fact]
     public void ComputeNamespaceMetrics_HighEfferentLowAfferentCouplings_InstabilityIsCorrect()
     {
-        // Ce=2, Ca=1 → Instability = 2 / (2+1) = 2/3 ≈ 0.667
-        // If the formula uses Ce*(Ce+Ca) the result becomes 2/6 = 1/3, which is wrong.
         var types = new[]
         {
-            new TypeDeclarationInfo("Hub", "NS.Hub", "Asm", false, new HashSet<string> { "NS.A", "NS.B" }),
-            new TypeDeclarationInfo("TypeA", "NS.A", "Asm", false, new HashSet<string> { "NS.Hub" }),
-            new TypeDeclarationInfo("TypeB", "NS.B", "Asm", false, new HashSet<string>()),
+            MakeType("Hub",   "NS.Hub", "Asm", refs: new[] { "NS.A.TypeA", "NS.B.TypeB" }),
+            MakeType("TypeA", "NS.A",   "Asm", refs: new[] { "NS.Hub.Hub" }),
+            MakeType("TypeB", "NS.B",   "Asm"),
         };
 
         var metrics = MetricsCalculator.ComputeNamespaceMetrics(types);
@@ -306,5 +309,22 @@ public class MetricsCalculatorTests
         hub.EfferentCouplings.ShouldBe(2);
         hub.AfferentCouplings.ShouldBe(1);
         hub.Instability.ShouldBe(2.0 / 3.0, tolerance: 1e-10);
+    }
+
+    private static TypeDeclarationInfo MakeType(
+        string name,
+        string ns,
+        string assembly,
+        bool isAbstract = false,
+        IEnumerable<string>? refs = null,
+        IEnumerable<string>? usings = null)
+    {
+        return new TypeDeclarationInfo(
+            name,
+            ns,
+            assembly,
+            isAbstract,
+            new HashSet<string>(refs ?? Enumerable.Empty<string>()),
+            new HashSet<string>(usings ?? Enumerable.Empty<string>()));
     }
 }
