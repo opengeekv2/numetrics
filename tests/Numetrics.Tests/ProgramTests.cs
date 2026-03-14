@@ -5,27 +5,44 @@ public class ProgramTests
     [Fact]
     public void Main_ReturnsZero()
     {
-        int result = Program.Main([]);
+        var result = Program.Main([]);
 
         result.ShouldBe(0);
     }
 
     [Fact]
-    public Task Main_WritesOutput()
+    public void Main_WithEmptyDirectory_WritesNoTypesFound()
     {
-        TextWriter originalOut = Console.Out;
+        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempDir);
         try
         {
-            StringWriter writer = new StringWriter();
-            Console.SetOut(writer);
+            var originalOut = Console.Out;
+            try
+            {
+                var writer = new StringWriter();
+                Console.SetOut(writer);
 
-            Program.Main([]);
+                Program.Main([tempDir]);
 
-            return Verify(writer.ToString());
+                writer.ToString().ShouldContain("No C# types found");
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
         }
         finally
         {
-            Console.SetOut(originalOut);
+            Directory.Delete(tempDir);
         }
+    }
+
+    [Fact]
+    public void Main_WithInvalidPath_ReturnsOne()
+    {
+        var result = Program.Main(["/nonexistent/path/that/does/not/exist"]);
+
+        result.ShouldBe(1);
     }
 }
