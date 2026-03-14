@@ -259,6 +259,69 @@ public class CSharpFileScannerTests
         type.UsingDirectives.ShouldContain("MyApp.Models");
     }
 
+    [Fact]
+    public void AnalyzeSyntaxTrees_FileScopedNamespaceWithBothFileAndNamespaceLevelUsings_AllUsingsIncluded()
+    {
+        // File-level using AND a using inside the file-scoped namespace declaration.
+        // Both must end up in the type's UsingDirectives (Concat, not Except).
+        const string code = """
+            using MyApp.Models;
+
+            namespace MyApp.Services;
+            using MyApp.Logging;
+            class ServiceA { }
+            """;
+
+        var types = ScanCode(code);
+
+        var type = types.ShouldHaveSingleItem();
+        type.UsingDirectives.ShouldContain("MyApp.Models");
+        type.UsingDirectives.ShouldContain("MyApp.Logging");
+    }
+
+    [Fact]
+    public void ScanDirectory_OnlyFindsCSFiles_IgnoresOtherExtensions()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(tempDir, "Valid.cs"), "namespace MyApp; class MyType { }");
+            File.WriteAllText(Path.Combine(tempDir, "Other.txt"), "namespace OtherApp; class OtherType { }");
+
+            var (types, _) = CSharpFileScanner.ScanDirectory(tempDir);
+
+            types.ShouldHaveSingleItem().Name.ShouldBe("MyType");
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ScanDirectory_ReadsAssemblyNameFromCsprojFile()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var projectDir = Path.Combine(tempDir, "MyProject");
+        Directory.CreateDirectory(projectDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(projectDir, "Code.cs"), "namespace MyApp; class MyType { }");
+            File.WriteAllText(
+                Path.Combine(projectDir, "MyProject.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
+
+            var (types, _) = CSharpFileScanner.ScanDirectory(tempDir);
+
+            types.ShouldHaveSingleItem().AssemblyName.ShouldBe("MyProject");
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     private static IReadOnlyList<TypeDeclarationInfo> ScanCode(string code, string assemblyName = "TestAssembly")
     {
         var tree = CSharpSyntaxTree.ParseText(code);
