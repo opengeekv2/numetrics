@@ -1,0 +1,103 @@
+using Numetrics.Analysis;
+
+namespace Numetrics.Tests.Analysis;
+
+public class CycleDetectorTests
+{
+    [Fact]
+    public void DetectCycles_NoDependencies_ReturnsNoCycles()
+    {
+        var dependencies = new Dictionary<string, IReadOnlySet<string>>
+        {
+            ["A"] = new HashSet<string>(),
+            ["B"] = new HashSet<string>(),
+        };
+
+        var cycles = CycleDetector.DetectCycles(dependencies);
+
+        cycles.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void DetectCycles_LinearChain_ReturnsNoCycles()
+    {
+        var dependencies = new Dictionary<string, IReadOnlySet<string>>
+        {
+            ["A"] = new HashSet<string> { "B" },
+            ["B"] = new HashSet<string> { "C" },
+            ["C"] = new HashSet<string>(),
+        };
+
+        var cycles = CycleDetector.DetectCycles(dependencies);
+
+        cycles.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void DetectCycles_SimpleCycle_ReturnsCycle()
+    {
+        var dependencies = new Dictionary<string, IReadOnlySet<string>>
+        {
+            ["A"] = new HashSet<string> { "B" },
+            ["B"] = new HashSet<string> { "A" },
+        };
+
+        var cycles = CycleDetector.DetectCycles(dependencies);
+
+        cycles.ShouldNotBeEmpty();
+        var allNodes = cycles.SelectMany(c => c).ToHashSet();
+        allNodes.ShouldContain("A");
+        allNodes.ShouldContain("B");
+    }
+
+    [Fact]
+    public void DetectCycles_ThreeNodeCycle_ReturnsCycle()
+    {
+        var dependencies = new Dictionary<string, IReadOnlySet<string>>
+        {
+            ["A"] = new HashSet<string> { "B" },
+            ["B"] = new HashSet<string> { "C" },
+            ["C"] = new HashSet<string> { "A" },
+        };
+
+        var cycles = CycleDetector.DetectCycles(dependencies);
+
+        cycles.ShouldNotBeEmpty();
+        var allNodes = cycles.SelectMany(c => c).ToHashSet();
+        allNodes.ShouldContain("A");
+        allNodes.ShouldContain("B");
+        allNodes.ShouldContain("C");
+    }
+
+    [Fact]
+    public void DetectCycles_SelfLoop_ReturnsCycle()
+    {
+        var dependencies = new Dictionary<string, IReadOnlySet<string>>
+        {
+            ["A"] = new HashSet<string> { "A" },
+        };
+
+        var cycles = CycleDetector.DetectCycles(dependencies);
+
+        cycles.ShouldNotBeEmpty();
+    }
+
+    [Fact]
+    public void DetectCycles_MixedGraph_OnlyCyclicNodesReported()
+    {
+        var dependencies = new Dictionary<string, IReadOnlySet<string>>
+        {
+            ["A"] = new HashSet<string> { "B" },
+            ["B"] = new HashSet<string> { "C" },
+            ["C"] = new HashSet<string> { "B" },
+            ["D"] = new HashSet<string> { "A" },
+        };
+
+        var cycles = CycleDetector.DetectCycles(dependencies);
+
+        cycles.ShouldNotBeEmpty();
+        var allNodes = cycles.SelectMany(c => c).ToHashSet();
+        allNodes.ShouldContain("B");
+        allNodes.ShouldContain("C");
+    }
+}
