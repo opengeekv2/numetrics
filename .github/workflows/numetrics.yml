@@ -1,0 +1,31 @@
+name: Numetrics
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  numetrics:
+    name: Numetrics
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore
+
+      - name: Run numetrics on src
+        run: dotnet run --project src/Numetrics/Numetrics.csproj --no-build -- src/

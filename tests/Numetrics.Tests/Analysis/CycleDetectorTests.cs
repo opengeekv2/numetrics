@@ -100,4 +100,70 @@ public class CycleDetectorTests
         allNodes.ShouldContain("B");
         allNodes.ShouldContain("C");
     }
+
+    [Fact]
+    public void DetectCycles_TwoNodeCycle_ReportsExactlyOneCycle()
+    {
+        var dependencies = new Dictionary<string, IReadOnlySet<string>>
+        {
+            ["A"] = new HashSet<string> { "B" },
+            ["B"] = new HashSet<string> { "A" },
+        };
+
+        var cycles = CycleDetector.DetectCycles(dependencies);
+
+        cycles.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public void DetectCycles_TwoSeparateCycles_ReportsBothCycles()
+    {
+        var dependencies = new Dictionary<string, IReadOnlySet<string>>
+        {
+            ["A"] = new HashSet<string> { "B" },
+            ["B"] = new HashSet<string> { "A" },
+            ["C"] = new HashSet<string> { "D" },
+            ["D"] = new HashSet<string> { "C" },
+        };
+
+        var cycles = CycleDetector.DetectCycles(dependencies);
+
+        cycles.Count.ShouldBe(2);
+    }
+
+    [Fact]
+    public void DetectCycles_DiamondGraph_ReturnsNoCycles()
+    {
+        // A -> B, A -> C, B -> D, C -> D  — no cycles
+        var dependencies = new Dictionary<string, IReadOnlySet<string>>
+        {
+            ["A"] = new HashSet<string> { "B", "C" },
+            ["B"] = new HashSet<string> { "D" },
+            ["C"] = new HashSet<string> { "D" },
+            ["D"] = new HashSet<string>(),
+        };
+
+        var cycles = CycleDetector.DetectCycles(dependencies);
+
+        cycles.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void DetectCycles_TwoCyclesWithNodeNamesAmbiguousWithoutSeparator_BothReported()
+    {
+        // Cycle 1: "A" <-> "BC"  (sorted+joined = "A->BC")
+        // Cycle 2: "AB" <-> "C" (sorted+joined = "AB->C")
+        // Without the "->" separator both keys collapse to "ABC", wrongly deduplicating them.
+        var dependencies = new Dictionary<string, IReadOnlySet<string>>
+        {
+            ["A"] = new HashSet<string> { "BC" },
+            ["BC"] = new HashSet<string> { "A" },
+            ["AB"] = new HashSet<string> { "C" },
+            ["C"] = new HashSet<string> { "AB" },
+        };
+
+        var cycles = CycleDetector.DetectCycles(dependencies);
+
+        cycles.Count.ShouldBe(2);
+    }
 }
