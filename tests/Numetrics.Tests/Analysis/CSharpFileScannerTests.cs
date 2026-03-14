@@ -196,6 +196,69 @@ public class CSharpFileScannerTests
         type.Namespace.ShouldBe(string.Empty);
     }
 
+    [Fact]
+    public void AnalyzeSyntaxTrees_StaticUsing_IsNotExtracted()
+    {
+        const string code = """
+            using static System.Math;
+            namespace MyApp;
+            class MyType { }
+            """;
+
+        var types = ScanCode(code);
+
+        var type = types.ShouldHaveSingleItem();
+        type.UsingDirectives.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void AnalyzeSyntaxTrees_AliasUsing_IsNotExtracted()
+    {
+        const string code = """
+            using MyAlias = System.Collections.Generic;
+            namespace MyApp;
+            class MyType { }
+            """;
+
+        var types = ScanCode(code);
+
+        var type = types.ShouldHaveSingleItem();
+        type.UsingDirectives.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void AnalyzeSyntaxTrees_GlobalUsing_IsNotInTypeUsingDirectives()
+    {
+        const string code = """
+            global using MyApp.Models;
+
+            namespace MyApp.Services;
+            class ServiceA { }
+            """;
+
+        var types = ScanCode(code);
+
+        var type = types.ShouldHaveSingleItem();
+        type.UsingDirectives.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void AnalyzeSyntaxTrees_NamespaceScopedUsing_ExtractedForTypesInNamespace()
+    {
+        const string code = """
+            namespace MyApp.Services
+            {
+                using MyApp.Models;
+                class ServiceA { }
+            }
+            """;
+
+        var types = ScanCode(code);
+
+        var type = types.ShouldHaveSingleItem();
+        type.UsingDirectives.ShouldContain("MyApp.Models");
+    }
+
     private static IReadOnlyList<TypeDeclarationInfo> ScanCode(string code, string assemblyName = "TestAssembly")
     {
         var tree = CSharpSyntaxTree.ParseText(code);

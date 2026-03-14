@@ -181,4 +181,54 @@ public class MetricsCalculatorTests
         var ns = metrics.ShouldHaveSingleItem();
         ns.Instability.ShouldBe(0.0);
     }
+
+    [Fact]
+    public void ComputeNamespaceMetrics_WithCycle_IncludesCycleInPackageMetrics()
+    {
+        var types = new[]
+        {
+            new TypeDeclarationInfo("ServiceA", "MyApp.A", "MyApp", false, new HashSet<string> { "MyApp.B" }),
+            new TypeDeclarationInfo("ServiceB", "MyApp.B", "MyApp", false, new HashSet<string> { "MyApp.A" }),
+        };
+
+        var metrics = MetricsCalculator.ComputeNamespaceMetrics(types);
+
+        metrics.Single(m => m.Name == "MyApp.A").Cycles.ShouldNotBeEmpty();
+        metrics.Single(m => m.Name == "MyApp.B").Cycles.ShouldNotBeEmpty();
+    }
+
+    [Fact]
+    public void ComputeAssemblyMetrics_WithAbstractTypes_ComputesAbstractness()
+    {
+        var types = new[]
+        {
+            new TypeDeclarationInfo("IService", "MyApp", "MyApp", true, new HashSet<string>()),
+            new TypeDeclarationInfo("ConcreteService", "MyApp", "MyApp", false, new HashSet<string>()),
+        };
+
+        var metrics = MetricsCalculator.ComputeAssemblyMetrics(types);
+
+        var asm = metrics.ShouldHaveSingleItem();
+        asm.AbstractTypeCount.ShouldBe(1);
+        asm.Abstractness.ShouldBe(0.5);
+    }
+
+    [Fact]
+    public void ComputeAssemblyMetrics_WithGlobalUsings_CountsAsEfferentDependencies()
+    {
+        var types = new[]
+        {
+            new TypeDeclarationInfo("ServiceA", "MyApp.Services", "MyApp.Services", false, new HashSet<string>()),
+            new TypeDeclarationInfo("ModelB", "MyApp.Models", "MyApp.Models", false, new HashSet<string>()),
+        };
+        var globalUsings = new HashSet<string> { "MyApp.Models" };
+
+        var metrics = MetricsCalculator.ComputeAssemblyMetrics(types, globalUsings);
+
+        var servicesMetrics = metrics.Single(m => m.Name == "MyApp.Services");
+        servicesMetrics.EfferentCouplings.ShouldBe(1);
+
+        var modelsMetrics = metrics.Single(m => m.Name == "MyApp.Models");
+        modelsMetrics.AfferentCouplings.ShouldBe(1);
+    }
 }

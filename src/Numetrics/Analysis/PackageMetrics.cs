@@ -1,6 +1,6 @@
 namespace Numetrics.Analysis;
 
-internal record PackageMetrics(
+internal sealed record PackageMetrics(
     string Name,
     int TypeCount,
     int AbstractTypeCount,
@@ -9,4 +9,5 @@ internal record PackageMetrics(
     double Abstractness,
     double Instability,
     double Distance,
-    IReadOnlyList<IReadOnlyList<string>> Cycles);
+    IReadOnlyList<IReadOnlyList<string>> Cycles)
+    : IPackageMetrics;

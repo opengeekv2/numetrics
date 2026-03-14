@@ -4,7 +4,7 @@
     "documentationRules": {
       "companyName": "opengeekv2",
       "copyrightText": "Copyright (c) {companyName}. All rights reserved.",
-      "documentInterfaces": true,
+      "documentInterfaces": false,
       "documentExposedElements": true,
       "documentInternalElements": false
     },

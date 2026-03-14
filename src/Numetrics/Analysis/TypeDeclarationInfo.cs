@@ -1,8 +1,9 @@
 namespace Numetrics.Analysis;
 
-internal record TypeDeclarationInfo(
+internal sealed record TypeDeclarationInfo(
     string Name,
     string Namespace,
     string AssemblyName,
     bool IsAbstract,
-    IReadOnlySet<string> UsingDirectives);
+    IReadOnlySet<string> UsingDirectives)
+    : ITypeDeclarationInfo;
