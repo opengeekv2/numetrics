@@ -165,6 +165,12 @@ internal static class CSharpFileScanner
             return null;
         }
 
-        return usingDirective.NamespaceOrType?.ToString();
+        var name = usingDirective.NamespaceOrType?.ToString();
+        if (name != null && name.StartsWith("global::", StringComparison.Ordinal))
+        {
+            return name["global::".Length..];
+        }
+
+        return name;
     }
 }
