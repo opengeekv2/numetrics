@@ -5,6 +5,5 @@ internal sealed record TypeDeclarationInfo(
     string Namespace,
     string AssemblyName,
     bool IsAbstract,
-    IReadOnlySet<string> ReferencedTypeNames,
-    IReadOnlySet<string> UsingDirectives)
+    IReadOnlySet<string> ReferencedTypeNames)
     : ITypeDeclarationInfo;

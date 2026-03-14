@@ -25,8 +25,8 @@ public class MetricsCalculatorTests
     [Fact]
     public void ComputeNamespaceMetrics_TwoNamespacesWithDependency_ComputesCouplings()
     {
-        // ServiceA has a field of type ModelB → fully-qualified ref produced by the
-        // semantic model is "MyApp.Models.ModelB".
+        // ServiceA has a field of type ModelB — the semantic model produces the
+        // fully-qualified name "MyApp.Models.ModelB" in ReferencedTypeNames.
         var types = new[]
         {
             MakeType("ServiceA", "MyApp.Services", "MyApp", refs: new[] { "MyApp.Models.ModelB" }),
@@ -66,10 +66,10 @@ public class MetricsCalculatorTests
     }
 
     [Fact]
-    public void ComputeNamespaceMetrics_IgnoresExternalTypeDependencies()
+    public void ComputeNamespaceMetrics_ExternalTypeInRefs_IsIgnored()
     {
-        // Fully-qualified external type names (produced by the semantic model) that
-        // are not present in the project must not contribute to efferent coupling.
+        // Fully-qualified external type names that are not present in the project
+        // registry must not contribute to efferent coupling.
         var types = new[]
         {
             MakeType(
@@ -99,50 +99,6 @@ public class MetricsCalculatorTests
         var ns = metrics.ShouldHaveSingleItem();
         ns.Abstractness.ShouldBe(1.0);
         ns.Distance.ShouldBe(0.0);
-    }
-
-    [Fact]
-    public void ComputeNamespaceMetrics_UnresolvedTypeWithUsingDirective_CountsAsEfferentDependency()
-    {
-        // When the semantic model cannot resolve a type (fallback path), the
-        // calculator uses UsingDirectives to qualify the simple name and look it up.
-        var types = new[]
-        {
-            MakeType(
-                "ServiceA",
-                "MyApp.Services",
-                "MyApp",
-                refs: new[] { "ModelB" },
-                usings: new[] { "MyApp.Models" }),
-            MakeType("ModelB", "MyApp.Models", "MyApp"),
-        };
-
-        var metrics = MetricsCalculator.ComputeNamespaceMetrics(types);
-
-        metrics.Single(m => m.Name == "MyApp.Services").EfferentCouplings.ShouldBe(1);
-        metrics.Single(m => m.Name == "MyApp.Models").AfferentCouplings.ShouldBe(1);
-    }
-
-    [Fact]
-    public void ComputeNamespaceMetrics_UnresolvedTypeWithUsingDirective_DoesNotSelfReference()
-    {
-        // A simple-name fallback that resolves (via UsingDirectives) to the type's
-        // own package must not count as an efferent coupling.
-        var types = new[]
-        {
-            MakeType(
-                "ServiceA",
-                "MyApp.Services",
-                "MyApp",
-                refs: new[] { "ServiceB" },
-                usings: new[] { "MyApp.Services" }),
-            MakeType("ServiceB", "MyApp.Services", "MyApp"),
-        };
-
-        var metrics = MetricsCalculator.ComputeNamespaceMetrics(types);
-
-        var ns = metrics.ShouldHaveSingleItem();
-        ns.EfferentCouplings.ShouldBe(0);
     }
 
     [Fact]
@@ -227,26 +183,6 @@ public class MetricsCalculatorTests
     }
 
     [Fact]
-    public void ComputeAssemblyMetrics_WithUnresolvedTypeAndUsingDirective_CountsAsEfferentDependency()
-    {
-        var types = new[]
-        {
-            MakeType(
-                "ServiceA",
-                "MyApp.Services",
-                "MyApp.Services",
-                refs: new[] { "ModelB" },
-                usings: new[] { "MyApp.Models" }),
-            MakeType("ModelB", "MyApp.Models", "MyApp.Models"),
-        };
-
-        var metrics = MetricsCalculator.ComputeAssemblyMetrics(types);
-
-        metrics.Single(m => m.Name == "MyApp.Services").EfferentCouplings.ShouldBe(1);
-        metrics.Single(m => m.Name == "MyApp.Models").AfferentCouplings.ShouldBe(1);
-    }
-
-    [Fact]
     public void ComputeAssemblyMetrics_NamespaceDiffersFromAssemblyName_DependencyResolvedToAssembly()
     {
         var types = new[]
@@ -257,8 +193,10 @@ public class MetricsCalculatorTests
 
         var metrics = MetricsCalculator.ComputeAssemblyMetrics(types);
 
-        metrics.Single(m => m.Name == "AssemblyA").EfferentCouplings.ShouldBe(1);
-        metrics.Single(m => m.Name == "AssemblyB").AfferentCouplings.ShouldBe(1);
+        var assemblyA = metrics.Single(m => m.Name == "AssemblyA");
+        var assemblyB = metrics.Single(m => m.Name == "AssemblyB");
+        assemblyA.EfferentCouplings.ShouldBe(1);
+        assemblyB.AfferentCouplings.ShouldBe(1);
     }
 
     [Fact]
@@ -316,15 +254,13 @@ public class MetricsCalculatorTests
         string ns,
         string assembly,
         bool isAbstract = false,
-        IEnumerable<string>? refs = null,
-        IEnumerable<string>? usings = null)
+        IEnumerable<string>? refs = null)
     {
         return new TypeDeclarationInfo(
             name,
             ns,
             assembly,
             isAbstract,
-            new HashSet<string>(refs ?? Enumerable.Empty<string>()),
-            new HashSet<string>(usings ?? Enumerable.Empty<string>()));
+            new HashSet<string>(refs ?? Enumerable.Empty<string>()));
     }
 }

@@ -51,24 +51,6 @@ public class CSharpFileScannerTests
     }
 
     [Fact]
-    public void AnalyzeSyntaxTrees_UsingDirectives_StoredForResolutionContext()
-    {
-        const string code = """
-            using MyApp.Models;
-            using System.Linq;
-
-            namespace MyApp.Services;
-            class ServiceA { }
-            """;
-
-        var types = ScanCode(code);
-
-        var type = types.ShouldHaveSingleItem();
-        type.UsingDirectives.ShouldContain("MyApp.Models");
-        type.UsingDirectives.ShouldContain("System.Linq");
-    }
-
-    [Fact]
     public void AnalyzeSyntaxTrees_MultipleTypesInFile_AllReturned()
     {
         const string code = """
@@ -84,44 +66,6 @@ public class CSharpFileScannerTests
         types.Select(t => t.Name).ShouldContain("TypeA");
         types.Select(t => t.Name).ShouldContain("TypeB");
         types.Select(t => t.Name).ShouldContain("ITypeC");
-    }
-
-    [Fact]
-    public void AnalyzeSyntaxTrees_MultipleTypesShareUsingDirectives()
-    {
-        const string code = """
-            using MyApp.Models;
-
-            namespace MyApp.Services;
-            class ServiceA { }
-            class ServiceB { }
-            """;
-
-        var types = ScanCode(code);
-
-        types.Count.ShouldBe(2);
-        foreach (var type in types)
-        {
-            type.UsingDirectives.ShouldContain("MyApp.Models");
-        }
-    }
-
-    [Fact]
-    public void AnalyzeSyntaxTrees_GlobalUsingDirective_IsIncludedInTypeUsingDirectives()
-    {
-        const string code = """
-            global using MyApp.Models;
-
-            namespace MyApp.Services;
-            class ServiceA { }
-            """;
-
-        var trees = new[] { (CSharpSyntaxTree.ParseText(code), "TestAssembly") };
-        var types = CSharpFileScanner.AnalyzeSyntaxTrees(trees);
-
-        // Global usings are folded into each type's UsingDirectives for resolution.
-        var type = types.ShouldHaveSingleItem();
-        type.UsingDirectives.ShouldContain("MyApp.Models");
     }
 
     [Fact]
@@ -198,72 +142,7 @@ public class CSharpFileScannerTests
         type.Namespace.ShouldBe(string.Empty);
     }
 
-    [Fact]
-    public void AnalyzeSyntaxTrees_StaticUsing_IsNotInUsingDirectives()
-    {
-        const string code = """
-            using static System.Math;
-            namespace MyApp;
-            class MyType { }
-            """;
-
-        var types = ScanCode(code);
-
-        var type = types.ShouldHaveSingleItem();
-        type.UsingDirectives.ShouldBeEmpty();
-    }
-
-    [Fact]
-    public void AnalyzeSyntaxTrees_AliasUsing_IsNotInUsingDirectives()
-    {
-        const string code = """
-            using MyAlias = System.Collections.Generic;
-            namespace MyApp;
-            class MyType { }
-            """;
-
-        var types = ScanCode(code);
-
-        var type = types.ShouldHaveSingleItem();
-        type.UsingDirectives.ShouldBeEmpty();
-    }
-
-    [Fact]
-    public void AnalyzeSyntaxTrees_NamespaceScopedUsing_ExtractedForTypesInNamespace()
-    {
-        const string code = """
-            namespace MyApp.Services
-            {
-                using MyApp.Models;
-                class ServiceA { }
-            }
-            """;
-
-        var types = ScanCode(code);
-
-        var type = types.ShouldHaveSingleItem();
-        type.UsingDirectives.ShouldContain("MyApp.Models");
-    }
-
-    [Fact]
-    public void AnalyzeSyntaxTrees_FileScopedNamespaceWithBothFileAndNamespaceLevelUsings_AllUsingsIncluded()
-    {
-        const string code = """
-            using MyApp.Models;
-
-            namespace MyApp.Services;
-            using MyApp.Logging;
-            class ServiceA { }
-            """;
-
-        var types = ScanCode(code);
-
-        var type = types.ShouldHaveSingleItem();
-        type.UsingDirectives.ShouldContain("MyApp.Models");
-        type.UsingDirectives.ShouldContain("MyApp.Logging");
-    }
-
-    // ── ReferencedTypeNames (semantic walker) tests ────────────────────────────
+    // ── ReferencedTypeNames (semantic model) tests ────────────────────────────
     [Fact]
     public void AnalyzeSyntaxTrees_ClassWithNoMembers_ReferencedTypeNamesIsEmpty()
     {
@@ -278,10 +157,31 @@ public class CSharpFileScannerTests
     }
 
     [Fact]
-    public void AnalyzeSyntaxTrees_FieldDeclaration_TypeNameCollected()
+    public void AnalyzeSyntaxTrees_UnresolvableType_IsIgnored()
     {
+        // "MissingType" is not present in the compilation. The semantic model
+        // returns an error type, which must be silently discarded.
         const string code = """
             namespace MyApp.Services;
+            class ServiceA
+            {
+                private MissingType field;
+            }
+            """;
+
+        var types = ScanCode(code);
+
+        types.ShouldHaveSingleItem().ReferencedTypeNames.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void AnalyzeSyntaxTrees_FieldDeclaration_TypeNameCollected()
+    {
+        // Both ModelA and ServiceA are compiled together so the semantic model
+        // can resolve "ModelA" to its fully-qualified name.
+        const string code = """
+            namespace MyApp.Services;
+            class ModelA { }
             class ServiceA
             {
                 private ModelA field;
@@ -290,9 +190,8 @@ public class CSharpFileScannerTests
 
         var types = ScanCode(code);
 
-        // Without the model type in the same compilation the semantic model
-        // cannot resolve "ModelA" — it falls back to the syntactic name.
-        types.ShouldHaveSingleItem().ReferencedTypeNames.ShouldContain("ModelA");
+        types.Single(t => t.Name == "ServiceA")
+             .ReferencedTypeNames.ShouldContain("MyApp.Services.ModelA");
     }
 
     [Fact]
@@ -300,6 +199,7 @@ public class CSharpFileScannerTests
     {
         const string code = """
             namespace MyApp.Services;
+            class ModelA { }
             class ServiceA
             {
                 public void Process(ModelA model) { }
@@ -308,7 +208,8 @@ public class CSharpFileScannerTests
 
         var types = ScanCode(code);
 
-        types.ShouldHaveSingleItem().ReferencedTypeNames.ShouldContain("ModelA");
+        types.Single(t => t.Name == "ServiceA")
+             .ReferencedTypeNames.ShouldContain("MyApp.Services.ModelA");
     }
 
     [Fact]
@@ -316,6 +217,7 @@ public class CSharpFileScannerTests
     {
         const string code = """
             namespace MyApp.Services;
+            class ModelA { }
             class ServiceA
             {
                 public ModelA Get() => null;
@@ -324,7 +226,8 @@ public class CSharpFileScannerTests
 
         var types = ScanCode(code);
 
-        types.ShouldHaveSingleItem().ReferencedTypeNames.ShouldContain("ModelA");
+        types.Single(t => t.Name == "ServiceA")
+             .ReferencedTypeNames.ShouldContain("MyApp.Services.ModelA");
     }
 
     [Fact]
@@ -332,18 +235,27 @@ public class CSharpFileScannerTests
     {
         const string code = """
             namespace MyApp.Services;
+            class BaseService { }
             class ServiceA : BaseService { }
             """;
 
         var types = ScanCode(code);
 
-        types.ShouldHaveSingleItem().ReferencedTypeNames.ShouldContain("BaseService");
+        types.Single(t => t.Name == "ServiceA")
+             .ReferencedTypeNames.ShouldContain("MyApp.Services.BaseService");
     }
 
     [Fact]
-    public void AnalyzeSyntaxTrees_QualifiedTypeName_CollectedAsQualifiedString()
+    public void AnalyzeSyntaxTrees_QualifiedTypeName_CollectedAsFullyQualifiedName()
     {
-        const string code = """
+        // ModelA is in a separate namespace, referenced with a qualified name.
+        // The semantic model resolves the qualified syntax to the FQN.
+        const string modelCode = """
+            namespace MyApp.Models;
+            class ModelA { }
+            """;
+
+        const string serviceCode = """
             namespace MyApp.Services;
             class ServiceA
             {
@@ -351,18 +263,30 @@ public class CSharpFileScannerTests
             }
             """;
 
-        var types = ScanCode(code);
+        var trees = new[]
+        {
+            (CSharpSyntaxTree.ParseText(modelCode), "TestAssembly"),
+            (CSharpSyntaxTree.ParseText(serviceCode), "TestAssembly"),
+        };
+        var types = CSharpFileScanner.AnalyzeSyntaxTrees(trees);
 
-        // With no ModelA in the compilation the semantic model can't resolve it,
-        // so the qualified syntax string is recorded as the fallback.
-        types.ShouldHaveSingleItem().ReferencedTypeNames.ShouldContain("MyApp.Models.ModelA");
+        types.Single(t => t.Name == "ServiceA")
+             .ReferencedTypeNames.ShouldContain("MyApp.Models.ModelA");
     }
 
     [Fact]
-    public void AnalyzeSyntaxTrees_GenericFieldType_OuterAndArgumentTypesCollected()
+    public void AnalyzeSyntaxTrees_GenericFieldType_TypeArgumentCollected()
     {
-        const string code = """
+        // ModelA is the type argument of List<>. The walker recursively resolves
+        // the type argument, producing its fully-qualified name.
+        const string modelCode = """
+            namespace MyApp.Models;
+            class ModelA { }
+            """;
+
+        const string serviceCode = """
             using System.Collections.Generic;
+            using MyApp.Models;
             namespace MyApp.Services;
             class ServiceA
             {
@@ -370,10 +294,15 @@ public class CSharpFileScannerTests
             }
             """;
 
-        var types = ScanCode(code);
+        var trees = new[]
+        {
+            (CSharpSyntaxTree.ParseText(modelCode), "TestAssembly"),
+            (CSharpSyntaxTree.ParseText(serviceCode), "TestAssembly"),
+        };
+        var types = CSharpFileScanner.AnalyzeSyntaxTrees(trees);
 
-        var referencedNames = types.ShouldHaveSingleItem().ReferencedTypeNames;
-        referencedNames.ShouldContain("ModelA");
+        types.Single(t => t.Name == "ServiceA")
+             .ReferencedTypeNames.ShouldContain("MyApp.Models.ModelA");
     }
 
     [Fact]

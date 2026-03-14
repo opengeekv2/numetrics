@@ -12,74 +12,45 @@ internal static class CSharpFileScanner
         var treeList = trees.ToList();
 
         // Build one compilation from all trees so the semantic model can resolve
-        // cross-file type references within the project.  Errors (missing external
-        // references) are tolerated; the walker falls back to syntax for those.
+        // cross-file type references within the project.
         var compilation = CSharpCompilation.Create(
             "NumetricsAnalysis",
             syntaxTrees: treeList.Select(t => t.Tree),
             references: GetFrameworkReferences(),
             options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
-        // First pass: collect global using directives so they are merged into
-        // every type's resolution context (mirrors how the C# compiler applies them).
-        var globalUsings = new HashSet<string>();
-        foreach (var (tree, _) in treeList)
-        {
-            var root = (CompilationUnitSyntax)tree.GetRoot();
-            foreach (var u in root.Usings)
-            {
-                if (u.GlobalKeyword.IsKind(SyntaxKind.GlobalKeyword))
-                {
-                    var name = GetUsingName(u);
-                    if (name != null)
-                    {
-                        globalUsings.Add(name);
-                    }
-                }
-            }
-        }
-
-        // Second pass: extract type declarations.
         var allTypes = new List<TypeDeclarationInfo>();
         foreach (var (tree, assemblyName) in treeList)
         {
             var semanticModel = compilation.GetSemanticModel(tree);
             var root = (CompilationUnitSyntax)tree.GetRoot();
 
-            var fileUsings = root.Usings
-                .Where(u => !u.GlobalKeyword.IsKind(SyntaxKind.GlobalKeyword))
-                .Select(GetUsingName)
-                .OfType<string>()
-                .Concat(globalUsings)
-                .ToHashSet();
-
             foreach (var memberDecl in root.Members)
             {
                 switch (memberDecl)
                 {
                     case FileScopedNamespaceDeclarationSyntax fileScopedNs:
-                        var nsName = fileScopedNs.Name.ToString();
-                        var nsUsings = fileUsings
-                            .Concat(fileScopedNs.Usings.Select(GetUsingName).OfType<string>())
-                            .ToHashSet();
                         ExtractTypesFromMembers(
-                            fileScopedNs.Members, nsName, assemblyName, nsUsings, semanticModel, allTypes);
+                            fileScopedNs.Members,
+                            fileScopedNs.Name.ToString(),
+                            assemblyName,
+                            semanticModel,
+                            allTypes);
                         break;
 
                     case NamespaceDeclarationSyntax blockNs:
-                        var blockNsName = blockNs.Name.ToString();
-                        var blockNsUsings = fileUsings
-                            .Concat(blockNs.Usings.Select(GetUsingName).OfType<string>())
-                            .ToHashSet();
                         ExtractTypesFromMembers(
-                            blockNs.Members, blockNsName, assemblyName, blockNsUsings, semanticModel, allTypes);
+                            blockNs.Members,
+                            blockNs.Name.ToString(),
+                            assemblyName,
+                            semanticModel,
+                            allTypes);
                         break;
 
                     default:
                         if (memberDecl is TypeDeclarationSyntax globalType)
                         {
-                            allTypes.Add(
-                                CreateTypeInfo(globalType, string.Empty, assemblyName, fileUsings, semanticModel));
+                            allTypes.Add(CreateTypeInfo(globalType, string.Empty, assemblyName, semanticModel));
                         }
 
                         break;
@@ -142,7 +113,6 @@ internal static class CSharpFileScanner
         SyntaxList<MemberDeclarationSyntax> members,
         string namespaceName,
         string assemblyName,
-        HashSet<string> usingDirectives,
         SemanticModel semanticModel,
         List<TypeDeclarationInfo> result)
     {
@@ -150,7 +120,7 @@ internal static class CSharpFileScanner
         {
             if (member is TypeDeclarationSyntax typeDecl)
             {
-                result.Add(CreateTypeInfo(typeDecl, namespaceName, assemblyName, usingDirectives, semanticModel));
+                result.Add(CreateTypeInfo(typeDecl, namespaceName, assemblyName, semanticModel));
             }
         }
     }
@@ -159,7 +129,6 @@ internal static class CSharpFileScanner
         TypeDeclarationSyntax typeDecl,
         string namespaceName,
         string assemblyName,
-        HashSet<string> usingDirectives,
         SemanticModel semanticModel)
     {
         var isAbstract = typeDecl is InterfaceDeclarationSyntax ||
@@ -173,32 +142,15 @@ internal static class CSharpFileScanner
             namespaceName,
             assemblyName,
             isAbstract,
-            walker.Names,
-            usingDirectives);
-    }
-
-    private static string? GetUsingName(UsingDirectiveSyntax usingDirective)
-    {
-        if (usingDirective.StaticKeyword.IsKind(SyntaxKind.StaticKeyword))
-        {
-            return null;
-        }
-
-        if (usingDirective.Alias != null)
-        {
-            return null;
-        }
-
-        return usingDirective.NamespaceOrType?.ToString();
+            walker.Names);
     }
 
     /// <summary>
-    /// Walks a type declaration and collects every referenced type name.
-    /// The semantic model is used first to produce fully-qualified names
-    /// (e.g. <c>"MyApp.Models.ModelA"</c>); for types the compiler cannot
-    /// resolve the syntax-level name is recorded as a fallback so that the
-    /// <see cref="MetricsCalculator"/> can still attempt resolution via the
-    /// type's <c>UsingDirectives</c>.
+    /// Walks a type declaration and collects every referenced type name as a
+    /// fully-qualified string (e.g. <c>"MyApp.Models.ModelA"</c>) using the
+    /// Roslyn semantic model.  Types that the compiler cannot resolve (e.g.
+    /// references to missing external packages) are silently ignored — they
+    /// are not project types and therefore cannot contribute to coupling.
     /// </summary>
     private sealed class TypeReferenceWalker : CSharpSyntaxWalker
     {
@@ -364,20 +316,18 @@ internal static class CSharpFileScanner
                 return;
             }
 
-            // Ask the semantic model for the resolved symbol first.  This gives us
-            // a fully-qualified name (e.g. "MyApp.Models.ModelA") so the calculator
-            // can do an exact lookup rather than relying on using-directive heuristics.
+            // Ask the semantic model for the resolved symbol.  This gives us a
+            // fully-qualified name (e.g. "MyApp.Models.ModelA").  If the type
+            // cannot be resolved it is external (e.g. a missing package reference)
+            // and is silently ignored — it is not a project type and cannot
+            // contribute to coupling.
             var symbol = this.semanticModel.GetTypeInfo(type).Type;
-            if (symbol != null && symbol.TypeKind != TypeKind.Error)
+            if (symbol == null || symbol.TypeKind == TypeKind.Error)
             {
-                this.AddSymbolRecursively(symbol);
                 return;
             }
 
-            // Fallback: the compiler could not resolve the type (e.g. a missing
-            // reference).  Record the syntactic name so the calculator can still
-            // attempt resolution via the type's UsingDirectives.
-            this.CollectTypeNameFromSyntax(type);
+            this.AddSymbolRecursively(symbol);
         }
 
         private void AddSymbolRecursively(ITypeSymbol symbol)
@@ -413,57 +363,10 @@ internal static class CSharpFileScanner
         private void AddQualifiedName(INamedTypeSymbol symbol)
         {
             var ns = symbol.ContainingNamespace;
-            var qualifiedName = (ns == null || ns.IsGlobalNamespace)
+            var qualifiedName = ns.IsGlobalNamespace
                 ? symbol.Name
                 : $"{ns.ToDisplayString()}.{symbol.Name}";
             this.names.Add(qualifiedName);
-        }
-
-        private void CollectTypeNameFromSyntax(TypeSyntax type)
-        {
-            switch (type)
-            {
-                case IdentifierNameSyntax id when id.Identifier.Text != "var":
-                    this.names.Add(id.Identifier.Text);
-                    break;
-
-                case QualifiedNameSyntax qn:
-                    this.names.Add(qn.ToString());
-                    break;
-
-                case GenericNameSyntax gn:
-                    this.names.Add(gn.Identifier.Text);
-                    foreach (var arg in gn.TypeArgumentList.Arguments)
-                    {
-                        this.CollectTypeNameFromSyntax(arg);
-                    }
-
-                    break;
-
-                case ArrayTypeSyntax arr:
-                    this.CollectTypeNameFromSyntax(arr.ElementType);
-                    break;
-
-                case NullableTypeSyntax nullable:
-                    this.CollectTypeNameFromSyntax(nullable.ElementType);
-                    break;
-
-                case TupleTypeSyntax tuple:
-                    foreach (var element in tuple.Elements)
-                    {
-                        this.CollectTypeNameFromSyntax(element.Type);
-                    }
-
-                    break;
-
-                case PointerTypeSyntax pointer:
-                    this.CollectTypeNameFromSyntax(pointer.ElementType);
-                    break;
-
-                case RefTypeSyntax refType:
-                    this.CollectTypeNameFromSyntax(refType.Type);
-                    break;
-            }
         }
     }
 }

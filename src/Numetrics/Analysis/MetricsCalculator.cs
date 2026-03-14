@@ -37,13 +37,7 @@ internal static class MetricsCalculator
 
             foreach (var type in group)
             {
-                ResolveAndAddDeps(
-                    type.ReferencedTypeNames,
-                    type.Namespace,
-                    type.UsingDirectives,
-                    key,
-                    qualifiedTypeToKey,
-                    deps);
+                ResolveAndAddDeps(type.ReferencedTypeNames, key, qualifiedTypeToKey, deps);
             }
 
             efferentDeps[key] = deps;
@@ -131,61 +125,24 @@ internal static class MetricsCalculator
     }
 
     /// <summary>
-    /// For each type reference name collected by the syntax walker, tries to
-    /// resolve it to a project package key using the same rules the C# compiler
-    /// applies: the type's own namespace is checked first (free access to
-    /// siblings), followed by every explicit using directive in scope.
-    /// Already-qualified names (containing a dot) are matched directly.
-    /// Only references that resolve to a <em>different</em> package are added.
+    /// For each fully-qualified type reference emitted by the semantic walker,
+    /// looks it up in the project type registry and adds the owning package key
+    /// to <paramref name="deps"/> if it differs from <paramref name="currentKey"/>.
+    /// References that do not match any project type (i.e. external types) are
+    /// silently ignored.
     /// </summary>
     private static void ResolveAndAddDeps(
         IReadOnlySet<string> referencedTypeNames,
-        string currentNamespace,
-        IReadOnlySet<string> usingDirectives,
         string currentKey,
         Dictionary<string, string> qualifiedTypeToKey,
         HashSet<string> deps)
     {
         foreach (var typeName in referencedTypeNames)
         {
-            if (typeName.Contains('.'))
+            if (qualifiedTypeToKey.TryGetValue(typeName, out var depKey) && depKey != currentKey)
             {
-                // Already qualified by the developer (e.g. "MyApp.Models.ModelA").
-                // Look it up directly in the registry.
-                if (qualifiedTypeToKey.TryGetValue(typeName, out var directKey) &&
-                    directKey != currentKey)
-                {
-                    deps.Add(directKey);
-                }
+                deps.Add(depKey);
             }
-            else
-            {
-                // Simple name — qualify using the current namespace first, then
-                // each using directive.  This mirrors C# name resolution and
-                // avoids counting a dependency for every package that happens to
-                // contain a type with the same name.
-                if (!string.IsNullOrEmpty(currentNamespace))
-                {
-                    TryAddDep($"{currentNamespace}.{typeName}", currentKey, qualifiedTypeToKey, deps);
-                }
-
-                foreach (var ns in usingDirectives)
-                {
-                    TryAddDep($"{ns}.{typeName}", currentKey, qualifiedTypeToKey, deps);
-                }
-            }
-        }
-    }
-
-    private static void TryAddDep(
-        string qualifiedName,
-        string currentKey,
-        Dictionary<string, string> qualifiedTypeToKey,
-        HashSet<string> deps)
-    {
-        if (qualifiedTypeToKey.TryGetValue(qualifiedName, out var depKey) && depKey != currentKey)
-        {
-            deps.Add(depKey);
         }
     }
 
