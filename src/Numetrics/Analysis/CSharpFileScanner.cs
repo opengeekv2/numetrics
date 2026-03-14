@@ -9,41 +9,40 @@ internal static class CSharpFileScanner
     internal static IReadOnlyList<TypeDeclarationInfo> AnalyzeSyntaxTrees(
         IEnumerable<(SyntaxTree Tree, string AssemblyName)> trees)
     {
-        var (types, _) = AnalyzeSyntaxTreesWithGlobalUsings(trees);
-        return types;
-    }
+        var treeList = trees.ToList();
 
-    internal static (IReadOnlyList<TypeDeclarationInfo> Types, IReadOnlySet<string> GlobalUsings)
-        AnalyzeSyntaxTreesWithGlobalUsings(IEnumerable<(SyntaxTree Tree, string AssemblyName)> trees)
-    {
-        var allTypes = new List<TypeDeclarationInfo>();
+        // First pass: collect global using directives so they can be added to every
+        // type's resolution context (mirrors how the C# compiler applies them).
         var globalUsings = new HashSet<string>();
-
-        foreach (var (tree, assemblyName) in trees)
+        foreach (var (tree, _) in treeList)
         {
             var root = (CompilationUnitSyntax)tree.GetRoot();
-
-            // Collect global usings from this file
-            foreach (var usingDirective in root.Usings)
+            foreach (var u in root.Usings)
             {
-                if (usingDirective.GlobalKeyword.IsKind(SyntaxKind.GlobalKeyword))
+                if (u.GlobalKeyword.IsKind(SyntaxKind.GlobalKeyword))
                 {
-                    var nameText = GetUsingName(usingDirective);
-                    if (nameText != null)
+                    var name = GetUsingName(u);
+                    if (name != null)
                     {
-                        globalUsings.Add(nameText);
+                        globalUsings.Add(name);
                     }
                 }
             }
+        }
 
-            // Collect file-level (non-global) using directives
+        // Second pass: extract type declarations with their references and usings.
+        var allTypes = new List<TypeDeclarationInfo>();
+        foreach (var (tree, assemblyName) in treeList)
+        {
+            var root = (CompilationUnitSyntax)tree.GetRoot();
+
             var fileUsings = root.Usings
                 .Where(u => !u.GlobalKeyword.IsKind(SyntaxKind.GlobalKeyword))
                 .Select(GetUsingName)
                 .OfType<string>()
+                .Concat(globalUsings)
                 .ToHashSet();
 
-            // Process types in top-level namespace declarations
             foreach (var memberDecl in root.Members)
             {
                 switch (memberDecl)
@@ -65,7 +64,6 @@ internal static class CSharpFileScanner
                         break;
 
                     default:
-                        // Types declared outside any namespace (global namespace)
                         if (memberDecl is TypeDeclarationSyntax globalType)
                         {
                             allTypes.Add(CreateTypeInfo(globalType, string.Empty, assemblyName, fileUsings));
@@ -76,15 +74,12 @@ internal static class CSharpFileScanner
             }
         }
 
-        return (allTypes, globalUsings);
+        return allTypes;
     }
 
-    internal static (IReadOnlyList<TypeDeclarationInfo> Types, IReadOnlySet<string> GlobalUsings)
-        ScanDirectory(string directoryPath)
+    internal static IReadOnlyList<TypeDeclarationInfo> ScanDirectory(string directoryPath)
     {
         var csFiles = Directory.GetFiles(directoryPath, "*.cs", SearchOption.AllDirectories);
-
-        // Determine assembly names from .csproj files
         var assemblyMap = BuildAssemblyMap(directoryPath, csFiles);
 
         var trees = csFiles.Select(file =>
@@ -95,7 +90,7 @@ internal static class CSharpFileScanner
             return (tree, assembly);
         });
 
-        return AnalyzeSyntaxTreesWithGlobalUsings(trees);
+        return AnalyzeSyntaxTrees(trees);
     }
 
     private static Dictionary<string, string> BuildAssemblyMap(string basePath, string[] csFiles)
@@ -145,11 +140,15 @@ internal static class CSharpFileScanner
         var isAbstract = typeDecl is InterfaceDeclarationSyntax ||
                          typeDecl.Modifiers.Any(m => m.IsKind(SyntaxKind.AbstractKeyword));
 
+        var walker = new TypeReferenceWalker();
+        walker.Visit(typeDecl);
+
         return new TypeDeclarationInfo(
             typeDecl.Identifier.Text,
             namespaceName,
             assemblyName,
             isAbstract,
+            walker.Names,
             usingDirectives);
     }
 
@@ -167,4 +166,215 @@ internal static class CSharpFileScanner
 
         return usingDirective.NamespaceOrType?.ToString();
     }
+
+    /// <summary>
+    /// Walks a type declaration syntax tree and collects every type name that appears
+    /// in a type-reference position (fields, properties, method signatures, base lists,
+    /// expressions, patterns, …). Only the syntactic names are recorded; name resolution
+    /// against the project registry is deferred to <see cref="MetricsCalculator"/>.
+    /// </summary>
+    private sealed class TypeReferenceWalker : CSharpSyntaxWalker
+    {
+        private HashSet<string> names = new HashSet<string>(StringComparer.Ordinal);
+
+        public IReadOnlySet<string> Names => this.names;
+
+        public override void VisitVariableDeclaration(VariableDeclarationSyntax node)
+        {
+            this.CollectTypeName(node.Type);
+            base.VisitVariableDeclaration(node);
+        }
+
+        public override void VisitPropertyDeclaration(PropertyDeclarationSyntax node)
+        {
+            this.CollectTypeName(node.Type);
+            base.VisitPropertyDeclaration(node);
+        }
+
+        public override void VisitIndexerDeclaration(IndexerDeclarationSyntax node)
+        {
+            this.CollectTypeName(node.Type);
+            base.VisitIndexerDeclaration(node);
+        }
+
+        public override void VisitEventDeclaration(EventDeclarationSyntax node)
+        {
+            this.CollectTypeName(node.Type);
+            base.VisitEventDeclaration(node);
+        }
+
+        public override void VisitMethodDeclaration(MethodDeclarationSyntax node)
+        {
+            this.CollectTypeName(node.ReturnType);
+            base.VisitMethodDeclaration(node);
+        }
+
+        public override void VisitLocalFunctionStatement(LocalFunctionStatementSyntax node)
+        {
+            this.CollectTypeName(node.ReturnType);
+            base.VisitLocalFunctionStatement(node);
+        }
+
+        public override void VisitOperatorDeclaration(OperatorDeclarationSyntax node)
+        {
+            this.CollectTypeName(node.ReturnType);
+            base.VisitOperatorDeclaration(node);
+        }
+
+        public override void VisitConversionOperatorDeclaration(ConversionOperatorDeclarationSyntax node)
+        {
+            this.CollectTypeName(node.Type);
+            base.VisitConversionOperatorDeclaration(node);
+        }
+
+        public override void VisitDelegateDeclaration(DelegateDeclarationSyntax node)
+        {
+            this.CollectTypeName(node.ReturnType);
+            base.VisitDelegateDeclaration(node);
+        }
+
+        public override void VisitParameter(ParameterSyntax node)
+        {
+            if (node.Type != null)
+            {
+                this.CollectTypeName(node.Type);
+            }
+
+            base.VisitParameter(node);
+        }
+
+        public override void VisitBaseList(BaseListSyntax node)
+        {
+            foreach (var type in node.Types)
+            {
+                this.CollectTypeName(type.Type);
+            }
+
+            base.VisitBaseList(node);
+        }
+
+        public override void VisitTypeConstraint(TypeConstraintSyntax node)
+        {
+            this.CollectTypeName(node.Type);
+            base.VisitTypeConstraint(node);
+        }
+
+        public override void VisitObjectCreationExpression(ObjectCreationExpressionSyntax node)
+        {
+            this.CollectTypeName(node.Type);
+            base.VisitObjectCreationExpression(node);
+        }
+
+        public override void VisitCastExpression(CastExpressionSyntax node)
+        {
+            this.CollectTypeName(node.Type);
+            base.VisitCastExpression(node);
+        }
+
+        public override void VisitTypeOfExpression(TypeOfExpressionSyntax node)
+        {
+            this.CollectTypeName(node.Type);
+            base.VisitTypeOfExpression(node);
+        }
+
+        public override void VisitDefaultExpression(DefaultExpressionSyntax node)
+        {
+            this.CollectTypeName(node.Type);
+            base.VisitDefaultExpression(node);
+        }
+
+        public override void VisitSizeOfExpression(SizeOfExpressionSyntax node)
+        {
+            this.CollectTypeName(node.Type);
+            base.VisitSizeOfExpression(node);
+        }
+
+        public override void VisitBinaryExpression(BinaryExpressionSyntax node)
+        {
+            if (node.IsKind(SyntaxKind.AsExpression) && node.Right is TypeSyntax asType)
+            {
+                this.CollectTypeName(asType);
+            }
+
+            base.VisitBinaryExpression(node);
+        }
+
+        public override void VisitAttribute(AttributeSyntax node)
+        {
+            // AttributeSyntax.Name is a NameSyntax which is also a TypeSyntax.
+            this.CollectTypeName(node.Name);
+            base.VisitAttribute(node);
+        }
+
+        public override void VisitDeclarationPattern(DeclarationPatternSyntax node)
+        {
+            this.CollectTypeName(node.Type);
+            base.VisitDeclarationPattern(node);
+        }
+
+        public override void VisitDeclarationExpression(DeclarationExpressionSyntax node)
+        {
+            this.CollectTypeName(node.Type);
+            base.VisitDeclarationExpression(node);
+        }
+
+        public override void VisitTypePattern(TypePatternSyntax node)
+        {
+            this.CollectTypeName(node.Type);
+            base.VisitTypePattern(node);
+        }
+
+        private void CollectTypeName(TypeSyntax? type)
+        {
+            if (type == null)
+            {
+                return;
+            }
+
+            switch (type)
+            {
+                case IdentifierNameSyntax id when id.Identifier.Text != "var":
+                    this.names.Add(id.Identifier.Text);
+                    break;
+
+                case QualifiedNameSyntax qn:
+                    this.names.Add(qn.ToString());
+                    break;
+
+                case GenericNameSyntax gn:
+                    this.names.Add(gn.Identifier.Text);
+                    foreach (var arg in gn.TypeArgumentList.Arguments)
+                    {
+                        this.CollectTypeName(arg);
+                    }
+
+                    break;
+
+                case ArrayTypeSyntax arr:
+                    this.CollectTypeName(arr.ElementType);
+                    break;
+
+                case NullableTypeSyntax nullable:
+                    this.CollectTypeName(nullable.ElementType);
+                    break;
+
+                case TupleTypeSyntax tuple:
+                    foreach (var element in tuple.Elements)
+                    {
+                        this.CollectTypeName(element.Type);
+                    }
+
+                    break;
+
+                case PointerTypeSyntax pointer:
+                    this.CollectTypeName(pointer.ElementType);
+                    break;
+
+                case RefTypeSyntax refType:
+                    this.CollectTypeName(refType.Type);
+                    break;
+            }
+        }
+    }
 }
+
