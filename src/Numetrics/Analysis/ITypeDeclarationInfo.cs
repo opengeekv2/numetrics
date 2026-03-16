@@ -10,5 +10,5 @@ internal interface ITypeDeclarationInfo
 
     bool IsAbstract { get; }
 
-    IReadOnlySet<string> UsingDirectives { get; }
+    IReadOnlySet<string> ReferencedTypeNames { get; }
 }

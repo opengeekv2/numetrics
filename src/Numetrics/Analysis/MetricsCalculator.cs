@@ -3,59 +3,32 @@ namespace Numetrics.Analysis;
 internal static class MetricsCalculator
 {
     internal static IReadOnlyList<PackageMetrics> ComputeNamespaceMetrics(
-        IReadOnlyList<TypeDeclarationInfo> types,
-        IReadOnlySet<string>? globalUsingDirectives = null)
+        IReadOnlyList<TypeDeclarationInfo> types)
     {
-        var projectNamespaces = types.Select(t => t.Namespace).ToHashSet();
-        return ComputeMetrics(
-            types,
-            t => t.Namespace,
-            projectNamespaces,
-            globalUsingDirectives);
+        return ComputeMetrics(types, t => t.Namespace);
     }
 
     internal static IReadOnlyList<PackageMetrics> ComputeAssemblyMetrics(
-        IReadOnlyList<TypeDeclarationInfo> types,
-        IReadOnlySet<string>? globalUsingDirectives = null)
+        IReadOnlyList<TypeDeclarationInfo> types)
     {
-        // Build a mapping from namespace → assembly for all project types
-        var namespaceToAssembly = types
-            .GroupBy(t => t.Namespace)
-            .ToDictionary(g => g.Key, g => g.First().AssemblyName);
-
-        var projectAssemblies = types.Select(t => t.AssemblyName).ToHashSet();
-
-        // Project global usings onto assembly names
-        IReadOnlySet<string>? globalAssemblyUsings = null;
-        if (globalUsingDirectives != null)
-        {
-            globalAssemblyUsings = globalUsingDirectives
-                .Where(namespaceToAssembly.ContainsKey)
-                .Select(ns => namespaceToAssembly[ns])
-                .ToHashSet();
-        }
-
-        return ComputeMetrics(
-            types,
-            t => t.AssemblyName,
-            projectAssemblies,
-            globalAssemblyUsings,
-            usingDirective =>
-                namespaceToAssembly.TryGetValue(usingDirective, out var assembly) ? assembly : null);
+        return ComputeMetrics(types, t => t.AssemblyName);
     }
 
     private static IReadOnlyList<PackageMetrics> ComputeMetrics(
         IReadOnlyList<TypeDeclarationInfo> types,
-        Func<TypeDeclarationInfo, string> groupKeySelector,
-        IReadOnlySet<string> projectKeys,
-        IReadOnlySet<string>? globalUsingDirectives,
-        Func<string, string?>? usingDirectiveToKey = null)
+        Func<TypeDeclarationInfo, string> groupKeySelector)
     {
-        usingDirectiveToKey ??= directive => projectKeys.Contains(directive) ? directive : null;
+        // Build a qualified-name → package-key map:
+        //   key = "Namespace.TypeName"  (the fully qualified type name)
+        //   value = the package key (namespace or assembly name)
+        //
+        // This allows the dependency resolver to do exact, unambiguous lookups
+        // instead of guessing based on simple (potentially colliding) type names.
+        var qualifiedTypeToKey = BuildQualifiedTypeMap(types, groupKeySelector);
 
         var grouped = types.GroupBy(groupKeySelector).ToList();
 
-        // Build efferent dependency map: key → set of dependency keys
+        // Build efferent dependency map: packageKey → set of dependency keys
         var efferentDeps = new Dictionary<string, HashSet<string>>();
         foreach (var group in grouped)
         {
@@ -64,20 +37,15 @@ internal static class MetricsCalculator
 
             foreach (var type in group)
             {
-                AddDepsFromUsings(type.UsingDirectives, key, usingDirectiveToKey, deps);
-            }
-
-            if (globalUsingDirectives != null)
-            {
-                AddDepsFromUsings(globalUsingDirectives, key, usingDirectiveToKey, deps);
+                ResolveAndAddDeps(type.ReferencedTypeNames, key, qualifiedTypeToKey, deps);
             }
 
             efferentDeps[key] = deps;
         }
 
-        // Build afferent coupling map: key → set of keys that depend on it
+        // Build afferent coupling map: packageKey → set of keys that depend on it
         var afferentDeps = new Dictionary<string, HashSet<string>>();
-        foreach (var key in projectKeys)
+        foreach (var key in grouped.Select(g => g.Key))
         {
             afferentDeps[key] = new HashSet<string>();
         }
@@ -135,16 +103,43 @@ internal static class MetricsCalculator
         return result;
     }
 
-    private static void AddDepsFromUsings(
-        IReadOnlySet<string> usings,
+    /// <summary>
+    /// Builds a map from fully-qualified type name ("Namespace.TypeName") to the
+    /// package key produced by <paramref name="groupKeySelector"/>.
+    /// Types in the global namespace are keyed by their simple name only.
+    /// </summary>
+    private static Dictionary<string, string> BuildQualifiedTypeMap(
+        IReadOnlyList<TypeDeclarationInfo> types,
+        Func<TypeDeclarationInfo, string> groupKeySelector)
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var type in types)
+        {
+            var qualifiedName = string.IsNullOrEmpty(type.Namespace)
+                ? type.Name
+                : $"{type.Namespace}.{type.Name}";
+            map[qualifiedName] = groupKeySelector(type);
+        }
+
+        return map;
+    }
+
+    /// <summary>
+    /// For each fully-qualified type reference emitted by the semantic walker,
+    /// looks it up in the project type registry and adds the owning package key
+    /// to <paramref name="deps"/> if it differs from <paramref name="currentKey"/>.
+    /// References that do not match any project type (i.e. external types) are
+    /// silently ignored.
+    /// </summary>
+    private static void ResolveAndAddDeps(
+        IReadOnlySet<string> referencedTypeNames,
         string currentKey,
-        Func<string, string?> usingDirectiveToKey,
+        Dictionary<string, string> qualifiedTypeToKey,
         HashSet<string> deps)
     {
-        foreach (var directive in usings)
+        foreach (var typeName in referencedTypeNames)
         {
-            var depKey = usingDirectiveToKey(directive);
-            if (depKey != null && depKey != currentKey)
+            if (qualifiedTypeToKey.TryGetValue(typeName, out var depKey) && depKey != currentKey)
             {
                 deps.Add(depKey);
             }

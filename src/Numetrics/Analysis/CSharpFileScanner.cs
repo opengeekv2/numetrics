@@ -9,66 +9,48 @@ internal static class CSharpFileScanner
     internal static IReadOnlyList<TypeDeclarationInfo> AnalyzeSyntaxTrees(
         IEnumerable<(SyntaxTree Tree, string AssemblyName)> trees)
     {
-        var (types, _) = AnalyzeSyntaxTreesWithGlobalUsings(trees);
-        return types;
-    }
+        var treeList = trees.ToList();
 
-    internal static (IReadOnlyList<TypeDeclarationInfo> Types, IReadOnlySet<string> GlobalUsings)
-        AnalyzeSyntaxTreesWithGlobalUsings(IEnumerable<(SyntaxTree Tree, string AssemblyName)> trees)
-    {
+        // Build one compilation from all trees so the semantic model can resolve
+        // cross-file type references within the project.
+        var compilation = CSharpCompilation.Create(
+            "NumetricsAnalysis",
+            syntaxTrees: treeList.Select(t => t.Tree),
+            references: GetFrameworkReferences(),
+            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
         var allTypes = new List<TypeDeclarationInfo>();
-        var globalUsings = new HashSet<string>();
-
-        foreach (var (tree, assemblyName) in trees)
+        foreach (var (tree, assemblyName) in treeList)
         {
+            var semanticModel = compilation.GetSemanticModel(tree);
             var root = (CompilationUnitSyntax)tree.GetRoot();
 
-            // Collect global usings from this file
-            foreach (var usingDirective in root.Usings)
-            {
-                if (usingDirective.GlobalKeyword.IsKind(SyntaxKind.GlobalKeyword))
-                {
-                    var nameText = GetUsingName(usingDirective);
-                    if (nameText != null)
-                    {
-                        globalUsings.Add(nameText);
-                    }
-                }
-            }
-
-            // Collect file-level (non-global) using directives
-            var fileUsings = root.Usings
-                .Where(u => !u.GlobalKeyword.IsKind(SyntaxKind.GlobalKeyword))
-                .Select(GetUsingName)
-                .OfType<string>()
-                .ToHashSet();
-
-            // Process types in top-level namespace declarations
             foreach (var memberDecl in root.Members)
             {
                 switch (memberDecl)
                 {
                     case FileScopedNamespaceDeclarationSyntax fileScopedNs:
-                        var nsName = fileScopedNs.Name.ToString();
-                        var nsUsings = fileUsings
-                            .Concat(fileScopedNs.Usings.Select(GetUsingName).OfType<string>())
-                            .ToHashSet();
-                        ExtractTypesFromMembers(fileScopedNs.Members, nsName, assemblyName, nsUsings, allTypes);
+                        ExtractTypesFromMembers(
+                            fileScopedNs.Members,
+                            fileScopedNs.Name.ToString(),
+                            assemblyName,
+                            semanticModel,
+                            allTypes);
                         break;
 
                     case NamespaceDeclarationSyntax blockNs:
-                        var blockNsName = blockNs.Name.ToString();
-                        var blockNsUsings = fileUsings
-                            .Concat(blockNs.Usings.Select(GetUsingName).OfType<string>())
-                            .ToHashSet();
-                        ExtractTypesFromMembers(blockNs.Members, blockNsName, assemblyName, blockNsUsings, allTypes);
+                        ExtractTypesFromMembers(
+                            blockNs.Members,
+                            blockNs.Name.ToString(),
+                            assemblyName,
+                            semanticModel,
+                            allTypes);
                         break;
 
                     default:
-                        // Types declared outside any namespace (global namespace)
                         if (memberDecl is TypeDeclarationSyntax globalType)
                         {
-                            allTypes.Add(CreateTypeInfo(globalType, string.Empty, assemblyName, fileUsings));
+                            allTypes.Add(CreateTypeInfo(globalType, string.Empty, assemblyName, semanticModel));
                         }
 
                         break;
@@ -76,15 +58,12 @@ internal static class CSharpFileScanner
             }
         }
 
-        return (allTypes, globalUsings);
+        return allTypes;
     }
 
-    internal static (IReadOnlyList<TypeDeclarationInfo> Types, IReadOnlySet<string> GlobalUsings)
-        ScanDirectory(string directoryPath)
+    internal static IReadOnlyList<TypeDeclarationInfo> ScanDirectory(string directoryPath)
     {
         var csFiles = Directory.GetFiles(directoryPath, "*.cs", SearchOption.AllDirectories);
-
-        // Determine assembly names from .csproj files
         var assemblyMap = BuildAssemblyMap(directoryPath, csFiles);
 
         var trees = csFiles.Select(file =>
@@ -95,7 +74,17 @@ internal static class CSharpFileScanner
             return (tree, assembly);
         });
 
-        return AnalyzeSyntaxTreesWithGlobalUsings(trees);
+        return AnalyzeSyntaxTrees(trees);
+    }
+
+    private static IEnumerable<MetadataReference> GetFrameworkReferences()
+    {
+        // Only the base runtime assembly is required.  All project-internal types
+        // are resolved directly from the compilation's own syntax trees; external
+        // types are not project dependencies and are filtered out by the calculator.
+        // Limiting references to the essentials avoids loading the full platform
+        // assembly set, which would otherwise add unnecessary overhead.
+        return new[] { MetadataReference.CreateFromFile(typeof(object).Assembly.Location) };
     }
 
     private static Dictionary<string, string> BuildAssemblyMap(string basePath, string[] csFiles)
@@ -124,14 +113,14 @@ internal static class CSharpFileScanner
         SyntaxList<MemberDeclarationSyntax> members,
         string namespaceName,
         string assemblyName,
-        HashSet<string> usingDirectives,
+        SemanticModel semanticModel,
         List<TypeDeclarationInfo> result)
     {
         foreach (var member in members)
         {
             if (member is TypeDeclarationSyntax typeDecl)
             {
-                result.Add(CreateTypeInfo(typeDecl, namespaceName, assemblyName, usingDirectives));
+                result.Add(CreateTypeInfo(typeDecl, namespaceName, assemblyName, semanticModel));
             }
         }
     }
@@ -140,31 +129,244 @@ internal static class CSharpFileScanner
         TypeDeclarationSyntax typeDecl,
         string namespaceName,
         string assemblyName,
-        HashSet<string> usingDirectives)
+        SemanticModel semanticModel)
     {
         var isAbstract = typeDecl is InterfaceDeclarationSyntax ||
                          typeDecl.Modifiers.Any(m => m.IsKind(SyntaxKind.AbstractKeyword));
+
+        var walker = new TypeReferenceWalker(semanticModel);
+        walker.Visit(typeDecl);
 
         return new TypeDeclarationInfo(
             typeDecl.Identifier.Text,
             namespaceName,
             assemblyName,
             isAbstract,
-            usingDirectives);
+            walker.Names);
     }
 
-    private static string? GetUsingName(UsingDirectiveSyntax usingDirective)
+    /// <summary>
+    /// Walks a type declaration and collects every referenced type name as a
+    /// fully-qualified string (e.g. <c>"MyApp.Models.ModelA"</c>) using the
+    /// Roslyn semantic model.  Types that the compiler cannot resolve (e.g.
+    /// references to missing external packages) are silently ignored — they
+    /// are not project types and therefore cannot contribute to coupling.
+    /// </summary>
+    private sealed class TypeReferenceWalker : CSharpSyntaxWalker
     {
-        if (usingDirective.StaticKeyword.IsKind(SyntaxKind.StaticKeyword))
+        private readonly SemanticModel semanticModel;
+        private readonly HashSet<string> names = new HashSet<string>(StringComparer.Ordinal);
+
+        public TypeReferenceWalker(SemanticModel semanticModel)
         {
-            return null;
+            this.semanticModel = semanticModel;
         }
 
-        if (usingDirective.Alias != null)
+        public IReadOnlySet<string> Names => names;
+
+        public override void VisitVariableDeclaration(VariableDeclarationSyntax node)
         {
-            return null;
+            CollectTypeName(node.Type);
+            base.VisitVariableDeclaration(node);
         }
 
-        return usingDirective.NamespaceOrType?.ToString();
+        public override void VisitPropertyDeclaration(PropertyDeclarationSyntax node)
+        {
+            CollectTypeName(node.Type);
+            base.VisitPropertyDeclaration(node);
+        }
+
+        public override void VisitIndexerDeclaration(IndexerDeclarationSyntax node)
+        {
+            CollectTypeName(node.Type);
+            base.VisitIndexerDeclaration(node);
+        }
+
+        public override void VisitEventDeclaration(EventDeclarationSyntax node)
+        {
+            CollectTypeName(node.Type);
+            base.VisitEventDeclaration(node);
+        }
+
+        public override void VisitMethodDeclaration(MethodDeclarationSyntax node)
+        {
+            CollectTypeName(node.ReturnType);
+            base.VisitMethodDeclaration(node);
+        }
+
+        public override void VisitLocalFunctionStatement(LocalFunctionStatementSyntax node)
+        {
+            CollectTypeName(node.ReturnType);
+            base.VisitLocalFunctionStatement(node);
+        }
+
+        public override void VisitOperatorDeclaration(OperatorDeclarationSyntax node)
+        {
+            CollectTypeName(node.ReturnType);
+            base.VisitOperatorDeclaration(node);
+        }
+
+        public override void VisitConversionOperatorDeclaration(ConversionOperatorDeclarationSyntax node)
+        {
+            CollectTypeName(node.Type);
+            base.VisitConversionOperatorDeclaration(node);
+        }
+
+        public override void VisitDelegateDeclaration(DelegateDeclarationSyntax node)
+        {
+            CollectTypeName(node.ReturnType);
+            base.VisitDelegateDeclaration(node);
+        }
+
+        public override void VisitParameter(ParameterSyntax node)
+        {
+            if (node.Type != null)
+            {
+                CollectTypeName(node.Type);
+            }
+
+            base.VisitParameter(node);
+        }
+
+        public override void VisitBaseList(BaseListSyntax node)
+        {
+            foreach (var type in node.Types)
+            {
+                CollectTypeName(type.Type);
+            }
+
+            base.VisitBaseList(node);
+        }
+
+        public override void VisitTypeConstraint(TypeConstraintSyntax node)
+        {
+            CollectTypeName(node.Type);
+            base.VisitTypeConstraint(node);
+        }
+
+        public override void VisitObjectCreationExpression(ObjectCreationExpressionSyntax node)
+        {
+            CollectTypeName(node.Type);
+            base.VisitObjectCreationExpression(node);
+        }
+
+        public override void VisitCastExpression(CastExpressionSyntax node)
+        {
+            CollectTypeName(node.Type);
+            base.VisitCastExpression(node);
+        }
+
+        public override void VisitTypeOfExpression(TypeOfExpressionSyntax node)
+        {
+            CollectTypeName(node.Type);
+            base.VisitTypeOfExpression(node);
+        }
+
+        public override void VisitDefaultExpression(DefaultExpressionSyntax node)
+        {
+            CollectTypeName(node.Type);
+            base.VisitDefaultExpression(node);
+        }
+
+        public override void VisitSizeOfExpression(SizeOfExpressionSyntax node)
+        {
+            CollectTypeName(node.Type);
+            base.VisitSizeOfExpression(node);
+        }
+
+        public override void VisitBinaryExpression(BinaryExpressionSyntax node)
+        {
+            if (node.IsKind(SyntaxKind.AsExpression) && node.Right is TypeSyntax asType)
+            {
+                CollectTypeName(asType);
+            }
+
+            base.VisitBinaryExpression(node);
+        }
+
+        public override void VisitAttribute(AttributeSyntax node)
+        {
+            // AttributeSyntax.Name is a NameSyntax which is also a TypeSyntax.
+            CollectTypeName(node.Name);
+            base.VisitAttribute(node);
+        }
+
+        public override void VisitDeclarationPattern(DeclarationPatternSyntax node)
+        {
+            CollectTypeName(node.Type);
+            base.VisitDeclarationPattern(node);
+        }
+
+        public override void VisitDeclarationExpression(DeclarationExpressionSyntax node)
+        {
+            CollectTypeName(node.Type);
+            base.VisitDeclarationExpression(node);
+        }
+
+        public override void VisitTypePattern(TypePatternSyntax node)
+        {
+            CollectTypeName(node.Type);
+            base.VisitTypePattern(node);
+        }
+
+        private void CollectTypeName(TypeSyntax? type)
+        {
+            if (type == null)
+            {
+                return;
+            }
+
+            // Ask the semantic model for the resolved symbol.  This gives us a
+            // fully-qualified name (e.g. "MyApp.Models.ModelA").  If the type
+            // cannot be resolved it is external (e.g. a missing package reference)
+            // and is silently ignored — it is not a project type and cannot
+            // contribute to coupling.
+            var symbol = semanticModel.GetTypeInfo(type).Type;
+            if (symbol == null || symbol.TypeKind == TypeKind.Error)
+            {
+                return;
+            }
+
+            AddSymbolRecursively(symbol);
+        }
+
+        private void AddSymbolRecursively(ITypeSymbol symbol)
+        {
+            switch (symbol)
+            {
+                case INamedTypeSymbol namedType:
+                    // Use the open-generic definition so that e.g. List<ModelA> and
+                    // List<ServiceB> both contribute a dependency on List<T> (which
+                    // is external and will be filtered) plus their type arguments.
+                    var definition = namedType.IsGenericType
+                        ? namedType.OriginalDefinition
+                        : namedType;
+                    AddQualifiedName(definition);
+
+                    foreach (var arg in namedType.TypeArguments)
+                    {
+                        AddSymbolRecursively(arg);
+                    }
+
+                    break;
+
+                case IArrayTypeSymbol arrayType:
+                    AddSymbolRecursively(arrayType.ElementType);
+                    break;
+
+                case IPointerTypeSymbol pointerType:
+                    AddSymbolRecursively(pointerType.PointedAtType);
+                    break;
+            }
+        }
+
+        private void AddQualifiedName(INamedTypeSymbol symbol)
+        {
+            var ns = symbol.ContainingNamespace;
+            var qualifiedName = ns.IsGlobalNamespace
+                ? symbol.Name
+                : $"{ns.ToDisplayString()}.{symbol.Name}";
+            names.Add(qualifiedName);
+        }
     }
 }

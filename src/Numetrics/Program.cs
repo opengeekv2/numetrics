@@ -14,7 +14,7 @@ internal static class Program
             return 1;
         }
 
-        var (types, globalUsings) = CSharpFileScanner.ScanDirectory(path);
+        var types = CSharpFileScanner.ScanDirectory(path);
 
         if (types.Count == 0)
         {
@@ -22,8 +22,8 @@ internal static class Program
             return 0;
         }
 
-        var namespaceMetrics = MetricsCalculator.ComputeNamespaceMetrics(types, globalUsings);
-        var assemblyMetrics = MetricsCalculator.ComputeAssemblyMetrics(types, globalUsings);
+        var namespaceMetrics = MetricsCalculator.ComputeNamespaceMetrics(types);
+        var assemblyMetrics = MetricsCalculator.ComputeAssemblyMetrics(types);
 
         Console.WriteLine("=== Namespace Metrics ===");
         PrintMetricsTable(namespaceMetrics);

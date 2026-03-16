@@ -90,12 +90,14 @@ public class ProgramTests
         Directory.CreateDirectory(tempDir);
         try
         {
+            // Each class holds a field whose type is declared in the other namespace,
+            // creating a real structural dependency cycle detected by the semantic model.
             File.WriteAllText(
                 Path.Combine(tempDir, "A.cs"),
-                "using MyApp.B; namespace MyApp.A; class TypeA { }");
+                "namespace MyApp.A; class TypeA { MyApp.B.TypeB Field; }");
             File.WriteAllText(
                 Path.Combine(tempDir, "B.cs"),
-                "using MyApp.A; namespace MyApp.B; class TypeB { }");
+                "namespace MyApp.B; class TypeB { MyApp.A.TypeA Field; }");
             File.WriteAllText(
                 Path.Combine(tempDir, "Test.csproj"),
                 "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
@@ -283,10 +285,10 @@ public class ProgramTests
         {
             File.WriteAllText(
                 Path.Combine(tempDir, "A.cs"),
-                "using MyApp.B; namespace MyApp.A; class TypeA { }");
+                "namespace MyApp.A; class TypeA { MyApp.B.TypeB Field; }");
             File.WriteAllText(
                 Path.Combine(tempDir, "B.cs"),
-                "using MyApp.A; namespace MyApp.B; class TypeB { }");
+                "namespace MyApp.B; class TypeB { MyApp.A.TypeA Field; }");
             File.WriteAllText(
                 Path.Combine(tempDir, "Test.csproj"),
                 "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
