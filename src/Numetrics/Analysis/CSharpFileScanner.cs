@@ -66,13 +66,20 @@ internal static class CSharpFileScanner
         var csFiles = Directory.GetFiles(directoryPath, "*.cs", SearchOption.AllDirectories);
         var assemblyMap = BuildAssemblyMap(directoryPath, csFiles);
 
-        var trees = csFiles.Select(file =>
-        {
-            var code = File.ReadAllText(file);
-            var tree = CSharpSyntaxTree.ParseText(code, path: file);
-            var assembly = assemblyMap.TryGetValue(file, out var asmName) ? asmName : Path.GetFileName(directoryPath);
-            return (tree, assembly);
-        });
+        // Materialize all trees eagerly so that every file's SyntaxTree is
+        // available when AnalyzeSyntaxTrees builds the single CSharpCompilation.
+        // Using a lazy sequence would risk some trees being absent from the
+        // compilation, causing cross-file type references to appear as
+        // unresolvable error types and producing missing-type results.
+        var trees = csFiles
+            .Select(file =>
+            {
+                var code = File.ReadAllText(file);
+                var tree = CSharpSyntaxTree.ParseText(code, path: file);
+                var assembly = assemblyMap.TryGetValue(file, out var asmName) ? asmName : Path.GetFileName(directoryPath);
+                return (tree, assembly);
+            })
+            .ToList();
 
         return AnalyzeSyntaxTrees(trees);
     }

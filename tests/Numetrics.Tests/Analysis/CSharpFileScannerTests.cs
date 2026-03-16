@@ -378,6 +378,36 @@ public class CSharpFileScannerTests
         }
     }
 
+    [Fact]
+    public void ScanDirectory_CrossFileFieldReference_TypeNameResolved()
+    {
+        // This test verifies that all .cs files are compiled together in a single
+        // CSharpCompilation so the semantic model can resolve cross-file type
+        // references. If files were compiled one by one (separate compilations),
+        // "MyApp.Models.ModelA" would appear as an unresolvable error type in
+        // ServiceA.cs and would be silently discarded, producing missing-type results.
+        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(tempDir, "ModelA.cs"),
+                "namespace MyApp.Models; class ModelA { }");
+            File.WriteAllText(
+                Path.Combine(tempDir, "ServiceA.cs"),
+                "namespace MyApp.Services; class ServiceA { private MyApp.Models.ModelA field; }");
+
+            var types = CSharpFileScanner.ScanDirectory(tempDir);
+
+            types.Single(t => t.Name == "ServiceA")
+                 .ReferencedTypeNames.ShouldContain("MyApp.Models.ModelA");
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     private static IReadOnlyList<TypeDeclarationInfo> ScanCode(string code, string assemblyName = "TestAssembly")
     {
         var tree = CSharpSyntaxTree.ParseText(code);
