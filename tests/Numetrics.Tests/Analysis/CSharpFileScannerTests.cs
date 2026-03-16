@@ -336,7 +336,7 @@ public class CSharpFileScannerTests
     }
 
     [Fact]
-    public void ScanDirectory_OnlyFindsCSFiles_IgnoresOtherExtensions()
+    public async Task LoadSolutionAsync_OnlyFindsCSFiles_IgnoresOtherExtensions()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(tempDir);
@@ -344,8 +344,12 @@ public class CSharpFileScannerTests
         {
             File.WriteAllText(Path.Combine(tempDir, "Valid.cs"), "namespace MyApp; class MyType { }");
             File.WriteAllText(Path.Combine(tempDir, "Other.txt"), "namespace OtherApp; class OtherType { }");
+            File.WriteAllText(
+                Path.Combine(tempDir, "MyApp.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
+            var slnPath = WriteSln(tempDir, "MyApp", "MyApp.csproj");
 
-            var types = CSharpFileScanner.ScanDirectory(tempDir);
+            var types = await CSharpFileScanner.LoadSolutionAsync(slnPath);
 
             types.ShouldHaveSingleItem().Name.ShouldBe("MyType");
         }
@@ -356,19 +360,19 @@ public class CSharpFileScannerTests
     }
 
     [Fact]
-    public void ScanDirectory_ReadsAssemblyNameFromCsprojFile()
+    public async Task LoadSolutionAsync_ReadsAssemblyNameFromProject()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-        var projectDir = Path.Combine(tempDir, "MyProject");
-        Directory.CreateDirectory(projectDir);
+        Directory.CreateDirectory(tempDir);
         try
         {
-            File.WriteAllText(Path.Combine(projectDir, "Code.cs"), "namespace MyApp; class MyType { }");
+            File.WriteAllText(Path.Combine(tempDir, "Code.cs"), "namespace MyApp; class MyType { }");
             File.WriteAllText(
-                Path.Combine(projectDir, "MyProject.csproj"),
+                Path.Combine(tempDir, "MyProject.csproj"),
                 "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
+            var slnPath = WriteSln(tempDir, "MyProject", "MyProject.csproj");
 
-            var types = CSharpFileScanner.ScanDirectory(tempDir);
+            var types = await CSharpFileScanner.LoadSolutionAsync(slnPath);
 
             types.ShouldHaveSingleItem().AssemblyName.ShouldBe("MyProject");
         }
@@ -379,13 +383,10 @@ public class CSharpFileScannerTests
     }
 
     [Fact]
-    public void ScanDirectory_CrossFileFieldReference_TypeNameResolved()
+    public async Task LoadSolutionAsync_CrossFileFieldReference_TypeNameResolved()
     {
-        // This test verifies that all .cs files are compiled together in a single
-        // CSharpCompilation so the semantic model can resolve cross-file type
-        // references. If files were compiled one by one (separate compilations),
-        // "MyApp.Models.ModelA" would appear as an unresolvable error type in
-        // ServiceA.cs and would be silently discarded, producing missing-type results.
+        // Both files are in the same project so the workspace compilation resolves
+        // "MyApp.Models.ModelA" from ServiceA.cs to its fully-qualified name.
         var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(tempDir);
         try
@@ -396,8 +397,12 @@ public class CSharpFileScannerTests
             File.WriteAllText(
                 Path.Combine(tempDir, "ServiceA.cs"),
                 "namespace MyApp.Services; class ServiceA { private MyApp.Models.ModelA field; }");
+            File.WriteAllText(
+                Path.Combine(tempDir, "MyApp.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
+            var slnPath = WriteSln(tempDir, "MyApp", "MyApp.csproj");
 
-            var types = CSharpFileScanner.ScanDirectory(tempDir);
+            var types = await CSharpFileScanner.LoadSolutionAsync(slnPath);
 
             types.Single(t => t.Name == "ServiceA")
                  .ReferencedTypeNames.ShouldContain("MyApp.Models.ModelA");
@@ -406,6 +411,20 @@ public class CSharpFileScannerTests
         {
             Directory.Delete(tempDir, recursive: true);
         }
+    }
+
+    // ── helpers ──────────────────────────────────────────────────────────────
+    private static string WriteSln(string directory, string projectName, string relativeProjectPath)
+    {
+        var slnPath = Path.Combine(directory, $"{projectName}.sln");
+        var content = $$"""
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "{{projectName}}", "{{relativeProjectPath}}", "{00000000-0000-0000-0000-000000000001}"
+            EndProject
+
+            """;
+        File.WriteAllText(slnPath, content);
+        return slnPath;
     }
 
     private static IReadOnlyList<TypeDeclarationInfo> ScanCode(string code, string assemblyName = "TestAssembly")

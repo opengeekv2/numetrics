@@ -1,11 +1,47 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.MSBuild;
 
 namespace Numetrics.Analysis;
 
 internal static class CSharpFileScanner
 {
+    /// <summary>
+    /// Loads every project in the solution at <paramref name="solutionFilePath"/>
+    /// using the Roslyn MSBuild workspace, obtains each project's fully-evaluated
+    /// <see cref="Compilation"/> (which includes all NuGet and framework references),
+    /// and extracts type declaration information from every source file.
+    /// </summary>
+    internal static async Task<IReadOnlyList<TypeDeclarationInfo>> LoadSolutionAsync(string solutionFilePath)
+    {
+        using var workspace = MSBuildWorkspace.Create();
+        var solution = await workspace.OpenSolutionAsync(solutionFilePath).ConfigureAwait(false);
+
+        var allTypes = new List<TypeDeclarationInfo>();
+        foreach (var project in solution.Projects)
+        {
+            // Only C# projects yield a CSharpCompilation; skip others (e.g. F#).
+            if (await project.GetCompilationAsync().ConfigureAwait(false) is not CSharpCompilation compilation)
+            {
+                continue;
+            }
+
+            foreach (var syntaxTree in compilation.SyntaxTrees)
+            {
+                var semanticModel = compilation.GetSemanticModel(syntaxTree);
+                AnalyzeTree(syntaxTree, project.AssemblyName, semanticModel, allTypes);
+            }
+        }
+
+        return allTypes;
+    }
+
+    /// <summary>
+    /// Builds a <see cref="CSharpCompilation"/> from the provided raw syntax trees
+    /// and analyses each tree.  This path is used by unit tests that supply
+    /// in-memory source code without going through the MSBuild workspace.
+    /// </summary>
     internal static IReadOnlyList<TypeDeclarationInfo> AnalyzeSyntaxTrees(
         IEnumerable<(SyntaxTree Tree, string AssemblyName)> trees)
     {
@@ -23,97 +59,62 @@ internal static class CSharpFileScanner
         foreach (var (tree, assemblyName) in treeList)
         {
             var semanticModel = compilation.GetSemanticModel(tree);
-            var root = (CompilationUnitSyntax)tree.GetRoot();
-
-            foreach (var memberDecl in root.Members)
-            {
-                switch (memberDecl)
-                {
-                    case FileScopedNamespaceDeclarationSyntax fileScopedNs:
-                        ExtractTypesFromMembers(
-                            fileScopedNs.Members,
-                            fileScopedNs.Name.ToString(),
-                            assemblyName,
-                            semanticModel,
-                            allTypes);
-                        break;
-
-                    case NamespaceDeclarationSyntax blockNs:
-                        ExtractTypesFromMembers(
-                            blockNs.Members,
-                            blockNs.Name.ToString(),
-                            assemblyName,
-                            semanticModel,
-                            allTypes);
-                        break;
-
-                    default:
-                        if (memberDecl is TypeDeclarationSyntax globalType)
-                        {
-                            allTypes.Add(CreateTypeInfo(globalType, string.Empty, assemblyName, semanticModel));
-                        }
-
-                        break;
-                }
-            }
+            AnalyzeTree(tree, assemblyName, semanticModel, allTypes);
         }
 
         return allTypes;
     }
 
-    internal static IReadOnlyList<TypeDeclarationInfo> ScanDirectory(string directoryPath)
+    // Walks the top-level members of a single syntax tree and appends any
+    // TypeDeclarationInfo objects found to <paramref name="result"/>.
+    private static void AnalyzeTree(
+        SyntaxTree syntaxTree,
+        string assemblyName,
+        SemanticModel semanticModel,
+        List<TypeDeclarationInfo> result)
     {
-        var csFiles = Directory.GetFiles(directoryPath, "*.cs", SearchOption.AllDirectories);
-        var assemblyMap = BuildAssemblyMap(directoryPath, csFiles);
+        var root = (CompilationUnitSyntax)syntaxTree.GetRoot();
 
-        // Materialize all trees eagerly so that every file's SyntaxTree is
-        // available when AnalyzeSyntaxTrees builds the single CSharpCompilation.
-        // Using a lazy sequence would risk some trees being absent from the
-        // compilation, causing cross-file type references to appear as
-        // unresolvable error types and producing missing-type results.
-        var trees = csFiles
-            .Select(file =>
+        foreach (var memberDecl in root.Members)
+        {
+            switch (memberDecl)
             {
-                var code = File.ReadAllText(file);
-                var tree = CSharpSyntaxTree.ParseText(code, path: file);
-                var assembly = assemblyMap.TryGetValue(file, out var asmName) ? asmName : Path.GetFileName(directoryPath);
-                return (tree, assembly);
-            })
-            .ToList();
+                case FileScopedNamespaceDeclarationSyntax fileScopedNs:
+                    ExtractTypesFromMembers(
+                        fileScopedNs.Members,
+                        fileScopedNs.Name.ToString(),
+                        assemblyName,
+                        semanticModel,
+                        result);
+                    break;
 
-        return AnalyzeSyntaxTrees(trees);
+                case NamespaceDeclarationSyntax blockNs:
+                    ExtractTypesFromMembers(
+                        blockNs.Members,
+                        blockNs.Name.ToString(),
+                        assemblyName,
+                        semanticModel,
+                        result);
+                    break;
+
+                default:
+                    if (memberDecl is TypeDeclarationSyntax globalType)
+                    {
+                        result.Add(CreateTypeInfo(globalType, string.Empty, assemblyName, semanticModel));
+                    }
+
+                    break;
+            }
+        }
     }
 
     private static IEnumerable<MetadataReference> GetFrameworkReferences()
     {
-        // Only the base runtime assembly is required.  All project-internal types
-        // are resolved directly from the compilation's own syntax trees; external
-        // types are not project dependencies and are filtered out by the calculator.
-        // Limiting references to the essentials avoids loading the full platform
-        // assembly set, which would otherwise add unnecessary overhead.
+        // Only the base runtime assembly is required for in-memory compilations
+        // used by AnalyzeSyntaxTrees.  All project-internal types are resolved
+        // directly from the compilation's own syntax trees; external types are
+        // not project types and are filtered out by the calculator.
         return new[] { MetadataReference.CreateFromFile(typeof(object).Assembly.Location) };
-    }
-
-    private static Dictionary<string, string> BuildAssemblyMap(string basePath, string[] csFiles)
-    {
-        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-        var csprojFiles = Directory.GetFiles(basePath, "*.csproj", SearchOption.AllDirectories);
-        foreach (var csproj in csprojFiles)
-        {
-            var projectDir = Path.GetDirectoryName(csproj) ?? basePath;
-            var assemblyName = Path.GetFileNameWithoutExtension(csproj);
-
-            foreach (var csFile in csFiles)
-            {
-                if (csFile.StartsWith(projectDir, StringComparison.OrdinalIgnoreCase))
-                {
-                    result[csFile] = assemblyName;
-                }
-            }
-        }
-
-        return result;
     }
 
     private static void ExtractTypesFromMembers(

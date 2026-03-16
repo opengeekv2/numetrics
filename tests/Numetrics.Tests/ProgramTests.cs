@@ -3,88 +3,65 @@ namespace Numetrics.Tests;
 public class ProgramTests
 {
     [Fact]
-    public void Main_ReturnsZero()
+    public async Task Main_ReturnsZero()
     {
-        var result = Program.Main([]);
-
-        result.ShouldBe(0);
-    }
-
-    [Fact]
-    public void Main_WithEmptyDirectory_WritesNoTypesFound()
-    {
-        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-        Directory.CreateDirectory(tempDir);
+        var slnPath = CreateTempSolutionWithSingleType();
         try
         {
-            var originalOut = Console.Out;
-            try
-            {
-                var writer = new StringWriter();
-                Console.SetOut(writer);
+            var result = await Program.Main([slnPath]);
 
-                Program.Main([tempDir]);
-
-                writer.ToString().ShouldContain("No C# types found");
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-            }
+            result.ShouldBe(0);
         }
         finally
         {
-            Directory.Delete(tempDir);
+            Directory.Delete(Path.GetDirectoryName(slnPath) !, recursive: true);
         }
     }
 
     [Fact]
-    public void Main_WithInvalidPath_ReturnsOne()
+    public async Task Main_WithNoProjects_WritesNoTypesFound()
     {
-        var result = Program.Main(["/nonexistent/path/that/does/not/exist"]);
+        // A solution that has no projects at all produces no types.
+        var slnPath = CreateTempEmptySolution();
+        try
+        {
+            var output = await CaptureStdoutAsync(() => Program.Main([slnPath]));
+
+            output.ShouldContain("No C# types found");
+        }
+        finally
+        {
+            Directory.Delete(Path.GetDirectoryName(slnPath) !, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Main_WithNonExistentPath_ReturnsOne()
+    {
+        var result = await Program.Main(["/nonexistent/path/that/does/not/exist.sln"]);
 
         result.ShouldBe(1);
     }
 
     [Fact]
-    public void Main_WithTypesFound_PrintsNamespaceAndAssemblyHeaders()
+    public async Task Main_WithTypesFound_PrintsNamespaceAndAssemblyHeaders()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-        Directory.CreateDirectory(tempDir);
+        var slnPath = CreateTempSolutionWithSingleType();
         try
         {
-            File.WriteAllText(
-                Path.Combine(tempDir, "Test.cs"),
-                "namespace MyApp; class MyType { }");
-            File.WriteAllText(
-                Path.Combine(tempDir, "Test.csproj"),
-                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
+            var output = await CaptureStdoutAsync(() => Program.Main([slnPath]));
 
-            var originalOut = Console.Out;
-            try
-            {
-                var writer = new StringWriter();
-                Console.SetOut(writer);
-
-                Program.Main([tempDir]);
-
-                var output = writer.ToString();
-                output.ShouldContain("Namespace Metrics");
-                output.ShouldContain("Assembly Metrics");
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-            }
+            output.ShouldContain("Namespace Metrics");
+            output.ShouldContain("Assembly Metrics");
         }
         finally
         {
-            Directory.Delete(tempDir, recursive: true);
+            Directory.Delete(Path.GetDirectoryName(slnPath) !, recursive: true);
         }
     }
 
     [Fact]
-    public void Main_WithCycle_PrintsCycleOutput()
+    public async Task Main_WithCycle_PrintsCycleOutput()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(tempDir);
@@ -101,21 +78,11 @@ public class ProgramTests
             File.WriteAllText(
                 Path.Combine(tempDir, "Test.csproj"),
                 "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
+            var slnPath = WriteSln(tempDir, "Test", "Test.csproj");
 
-            var originalOut = Console.Out;
-            try
-            {
-                var writer = new StringWriter();
-                Console.SetOut(writer);
+            var output = await CaptureStdoutAsync(() => Program.Main([slnPath]));
 
-                Program.Main([tempDir]);
-
-                writer.ToString().ShouldContain("[cycle]");
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-            }
+            output.ShouldContain("[cycle]");
         }
         finally
         {
@@ -124,7 +91,7 @@ public class ProgramTests
     }
 
     [Fact]
-    public void Main_WithInvalidPath_WritesErrorMessageToStderr()
+    public async Task Main_WithNonExistentPath_WritesErrorMessageToStderr()
     {
         var originalError = Console.Error;
         try
@@ -132,7 +99,7 @@ public class ProgramTests
             var errorWriter = new StringWriter();
             Console.SetError(errorWriter);
 
-            Program.Main(["/nonexistent/path/that/does/not/exist"]);
+            await Program.Main(["/nonexistent/path/that/does/not/exist.sln"]);
 
             errorWriter.ToString().ShouldContain("Error");
         }
@@ -143,16 +110,16 @@ public class ProgramTests
     }
 
     [Fact]
-    public void Main_WithInvalidPath_ErrorMessageContainsPath()
+    public async Task Main_WithNonExistentPath_ErrorMessageContainsPath()
     {
-        const string invalidPath = "/nonexistent/path/that/does/not/exist";
+        const string invalidPath = "/nonexistent/path/that/does/not/exist.sln";
         var originalError = Console.Error;
         try
         {
             var errorWriter = new StringWriter();
             Console.SetError(errorWriter);
 
-            Program.Main([invalidPath]);
+            await Program.Main([invalidPath]);
 
             errorWriter.ToString().ShouldContain(invalidPath);
         }
@@ -163,29 +130,29 @@ public class ProgramTests
     }
 
     [Fact]
-    public void Main_WithTypesFound_HasBlankLineBetweenSections()
+    public async Task Main_WithTypesFound_HasBlankLineBetweenSections()
     {
-        var tempDir = CreateTempDirWithSingleType();
+        var slnPath = CreateTempSolutionWithSingleType();
         try
         {
-            var output = CaptureStdout(() => Program.Main([tempDir]));
+            var output = await CaptureStdoutAsync(() => Program.Main([slnPath]));
 
             // A blank line separates the namespace table from the assembly section header.
             output.ShouldContain(Environment.NewLine + Environment.NewLine + "=== Assembly Metrics ===");
         }
         finally
         {
-            Directory.Delete(tempDir, recursive: true);
+            Directory.Delete(Path.GetDirectoryName(slnPath) !, recursive: true);
         }
     }
 
     [Fact]
-    public void Main_WithTypesFound_PrintsAssemblyMetricsTableContent()
+    public async Task Main_WithTypesFound_PrintsAssemblyMetricsTableContent()
     {
-        var tempDir = CreateTempDirWithSingleType();
+        var slnPath = CreateTempSolutionWithSingleType();
         try
         {
-            var output = CaptureStdout(() => Program.Main([tempDir]));
+            var output = await CaptureStdoutAsync(() => Program.Main([slnPath]));
 
             // The assembly table must appear AFTER the "=== Assembly Metrics ===" header.
             var assemblySection = output.Substring(output.IndexOf("Assembly Metrics", StringComparison.Ordinal));
@@ -193,12 +160,12 @@ public class ProgramTests
         }
         finally
         {
-            Directory.Delete(tempDir, recursive: true);
+            Directory.Delete(Path.GetDirectoryName(slnPath) !, recursive: true);
         }
     }
 
     [Fact]
-    public void Main_WithMultiplePackages_PrintsInAlphabeticalOrder()
+    public async Task Main_WithMultiplePackages_PrintsInAlphabeticalOrder()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(tempDir);
@@ -210,8 +177,9 @@ public class ProgramTests
             File.WriteAllText(
                 Path.Combine(tempDir, "T.csproj"),
                 "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
+            var slnPath = WriteSln(tempDir, "T", "T.csproj");
 
-            var output = CaptureStdout(() => Program.Main([tempDir]));
+            var output = await CaptureStdoutAsync(() => Program.Main([slnPath]));
 
             var appleIndex = output.IndexOf("Apple", StringComparison.Ordinal);
             var zooIndex = output.IndexOf("Zoo", StringComparison.Ordinal);
@@ -224,12 +192,12 @@ public class ProgramTests
     }
 
     [Fact]
-    public void Main_WithTypesFound_PrintsColumnHeaderLabels()
+    public async Task Main_WithTypesFound_PrintsColumnHeaderLabels()
     {
-        var tempDir = CreateTempDirWithSingleType();
+        var slnPath = CreateTempSolutionWithSingleType();
         try
         {
-            var output = CaptureStdout(() => Program.Main([tempDir]));
+            var output = await CaptureStdoutAsync(() => Program.Main([slnPath]));
 
             // All seven column labels must appear in order. The regex is case-sensitive,
             // which distinguishes single-letter columns ("A", "I", "D") from letters that
@@ -238,46 +206,46 @@ public class ProgramTests
         }
         finally
         {
-            Directory.Delete(tempDir, recursive: true);
+            Directory.Delete(Path.GetDirectoryName(slnPath) !, recursive: true);
         }
     }
 
     [Fact]
-    public void Main_WithTypesFound_PrintsHeaderSeparatorLine()
+    public async Task Main_WithTypesFound_PrintsHeaderSeparatorLine()
     {
-        var tempDir = CreateTempDirWithSingleType();
+        var slnPath = CreateTempSolutionWithSingleType();
         try
         {
-            var output = CaptureStdout(() => Program.Main([tempDir]));
+            var output = await CaptureStdoutAsync(() => Program.Main([slnPath]));
 
             // Separator is a line of 80 dashes
             output.ShouldContain(new string('-', 80));
         }
         finally
         {
-            Directory.Delete(tempDir, recursive: true);
+            Directory.Delete(Path.GetDirectoryName(slnPath) !, recursive: true);
         }
     }
 
     [Fact]
-    public void Main_WithTypesFound_PrintsMetricValuesInRow()
+    public async Task Main_WithTypesFound_PrintsMetricValuesInRow()
     {
-        var tempDir = CreateTempDirWithSingleType();
+        var slnPath = CreateTempSolutionWithSingleType();
         try
         {
-            var output = CaptureStdout(() => Program.Main([tempDir]));
+            var output = await CaptureStdoutAsync(() => Program.Main([slnPath]));
 
             // Concrete type with no couplings: abstractness=0.00, instability=0.00
             output.ShouldContain("0.00");
         }
         finally
         {
-            Directory.Delete(tempDir, recursive: true);
+            Directory.Delete(Path.GetDirectoryName(slnPath) !, recursive: true);
         }
     }
 
     [Fact]
-    public void Main_WithCycle_PrintsCycleWithArrowSeparator()
+    public async Task Main_WithCycle_PrintsCycleWithArrowSeparator()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(tempDir);
@@ -292,8 +260,9 @@ public class ProgramTests
             File.WriteAllText(
                 Path.Combine(tempDir, "Test.csproj"),
                 "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
+            var slnPath = WriteSln(tempDir, "Test", "Test.csproj");
 
-            var output = CaptureStdout(() => Program.Main([tempDir]));
+            var output = await CaptureStdoutAsync(() => Program.Main([slnPath]));
 
             // Cycle must use " -> " as node separator, not an empty string
             output.ShouldContain(" -> ");
@@ -304,7 +273,13 @@ public class ProgramTests
         }
     }
 
-    private static string CreateTempDirWithSingleType()
+    // ── helpers ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Creates a temp directory containing a single-project solution with one
+    /// concrete type, then returns the path to the <c>.sln</c> file.
+    /// </summary>
+    private static string CreateTempSolutionWithSingleType()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(tempDir);
@@ -312,17 +287,48 @@ public class ProgramTests
         File.WriteAllText(
             Path.Combine(tempDir, "MyProject.csproj"),
             "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
-        return tempDir;
+        return WriteSln(tempDir, "MyProject", "MyProject.csproj");
     }
 
-    private static string CaptureStdout(Action action)
+    /// <summary>
+    /// Creates a temp directory containing a solution file with no projects,
+    /// then returns the path to the <c>.sln</c> file.
+    /// </summary>
+    private static string CreateTempEmptySolution()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempDir);
+        var slnPath = Path.Combine(tempDir, "Empty.sln");
+        File.WriteAllText(slnPath, "Microsoft Visual Studio Solution File, Format Version 12.00\r\n");
+        return slnPath;
+    }
+
+    /// <summary>
+    /// Writes a minimal <c>.sln</c> file into <paramref name="directory"/> that
+    /// references a single project at the given relative path, and returns the
+    /// absolute path to the written <c>.sln</c> file.
+    /// </summary>
+    private static string WriteSln(string directory, string projectName, string relativeProjectPath)
+    {
+        var slnPath = Path.Combine(directory, $"{projectName}.sln");
+        var content = $$"""
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "{{projectName}}", "{{relativeProjectPath}}", "{00000000-0000-0000-0000-000000000001}"
+            EndProject
+
+            """;
+        File.WriteAllText(slnPath, content);
+        return slnPath;
+    }
+
+    private static async Task<string> CaptureStdoutAsync(Func<Task<int>> action)
     {
         var originalOut = Console.Out;
         try
         {
             var writer = new StringWriter();
             Console.SetOut(writer);
-            action();
+            await action();
             return writer.ToString();
         }
         finally
