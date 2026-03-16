@@ -162,59 +162,59 @@ internal static class CSharpFileScanner
             this.semanticModel = semanticModel;
         }
 
-        public IReadOnlySet<string> Names => this.names;
+        public IReadOnlySet<string> Names => names;
 
         public override void VisitVariableDeclaration(VariableDeclarationSyntax node)
         {
-            this.CollectTypeName(node.Type);
+            CollectTypeName(node.Type);
             base.VisitVariableDeclaration(node);
         }
 
         public override void VisitPropertyDeclaration(PropertyDeclarationSyntax node)
         {
-            this.CollectTypeName(node.Type);
+            CollectTypeName(node.Type);
             base.VisitPropertyDeclaration(node);
         }
 
         public override void VisitIndexerDeclaration(IndexerDeclarationSyntax node)
         {
-            this.CollectTypeName(node.Type);
+            CollectTypeName(node.Type);
             base.VisitIndexerDeclaration(node);
         }
 
         public override void VisitEventDeclaration(EventDeclarationSyntax node)
         {
-            this.CollectTypeName(node.Type);
+            CollectTypeName(node.Type);
             base.VisitEventDeclaration(node);
         }
 
         public override void VisitMethodDeclaration(MethodDeclarationSyntax node)
         {
-            this.CollectTypeName(node.ReturnType);
+            CollectTypeName(node.ReturnType);
             base.VisitMethodDeclaration(node);
         }
 
         public override void VisitLocalFunctionStatement(LocalFunctionStatementSyntax node)
         {
-            this.CollectTypeName(node.ReturnType);
+            CollectTypeName(node.ReturnType);
             base.VisitLocalFunctionStatement(node);
         }
 
         public override void VisitOperatorDeclaration(OperatorDeclarationSyntax node)
         {
-            this.CollectTypeName(node.ReturnType);
+            CollectTypeName(node.ReturnType);
             base.VisitOperatorDeclaration(node);
         }
 
         public override void VisitConversionOperatorDeclaration(ConversionOperatorDeclarationSyntax node)
         {
-            this.CollectTypeName(node.Type);
+            CollectTypeName(node.Type);
             base.VisitConversionOperatorDeclaration(node);
         }
 
         public override void VisitDelegateDeclaration(DelegateDeclarationSyntax node)
         {
-            this.CollectTypeName(node.ReturnType);
+            CollectTypeName(node.ReturnType);
             base.VisitDelegateDeclaration(node);
         }
 
@@ -222,7 +222,7 @@ internal static class CSharpFileScanner
         {
             if (node.Type != null)
             {
-                this.CollectTypeName(node.Type);
+                CollectTypeName(node.Type);
             }
 
             base.VisitParameter(node);
@@ -232,7 +232,7 @@ internal static class CSharpFileScanner
         {
             foreach (var type in node.Types)
             {
-                this.CollectTypeName(type.Type);
+                CollectTypeName(type.Type);
             }
 
             base.VisitBaseList(node);
@@ -240,37 +240,37 @@ internal static class CSharpFileScanner
 
         public override void VisitTypeConstraint(TypeConstraintSyntax node)
         {
-            this.CollectTypeName(node.Type);
+            CollectTypeName(node.Type);
             base.VisitTypeConstraint(node);
         }
 
         public override void VisitObjectCreationExpression(ObjectCreationExpressionSyntax node)
         {
-            this.CollectTypeName(node.Type);
+            CollectTypeName(node.Type);
             base.VisitObjectCreationExpression(node);
         }
 
         public override void VisitCastExpression(CastExpressionSyntax node)
         {
-            this.CollectTypeName(node.Type);
+            CollectTypeName(node.Type);
             base.VisitCastExpression(node);
         }
 
         public override void VisitTypeOfExpression(TypeOfExpressionSyntax node)
         {
-            this.CollectTypeName(node.Type);
+            CollectTypeName(node.Type);
             base.VisitTypeOfExpression(node);
         }
 
         public override void VisitDefaultExpression(DefaultExpressionSyntax node)
         {
-            this.CollectTypeName(node.Type);
+            CollectTypeName(node.Type);
             base.VisitDefaultExpression(node);
         }
 
         public override void VisitSizeOfExpression(SizeOfExpressionSyntax node)
         {
-            this.CollectTypeName(node.Type);
+            CollectTypeName(node.Type);
             base.VisitSizeOfExpression(node);
         }
 
@@ -278,7 +278,7 @@ internal static class CSharpFileScanner
         {
             if (node.IsKind(SyntaxKind.AsExpression) && node.Right is TypeSyntax asType)
             {
-                this.CollectTypeName(asType);
+                CollectTypeName(asType);
             }
 
             base.VisitBinaryExpression(node);
@@ -287,25 +287,25 @@ internal static class CSharpFileScanner
         public override void VisitAttribute(AttributeSyntax node)
         {
             // AttributeSyntax.Name is a NameSyntax which is also a TypeSyntax.
-            this.CollectTypeName(node.Name);
+            CollectTypeName(node.Name);
             base.VisitAttribute(node);
         }
 
         public override void VisitDeclarationPattern(DeclarationPatternSyntax node)
         {
-            this.CollectTypeName(node.Type);
+            CollectTypeName(node.Type);
             base.VisitDeclarationPattern(node);
         }
 
         public override void VisitDeclarationExpression(DeclarationExpressionSyntax node)
         {
-            this.CollectTypeName(node.Type);
+            CollectTypeName(node.Type);
             base.VisitDeclarationExpression(node);
         }
 
         public override void VisitTypePattern(TypePatternSyntax node)
         {
-            this.CollectTypeName(node.Type);
+            CollectTypeName(node.Type);
             base.VisitTypePattern(node);
         }
 
@@ -321,13 +321,13 @@ internal static class CSharpFileScanner
             // cannot be resolved it is external (e.g. a missing package reference)
             // and is silently ignored — it is not a project type and cannot
             // contribute to coupling.
-            var symbol = this.semanticModel.GetTypeInfo(type).Type;
+            var symbol = semanticModel.GetTypeInfo(type).Type;
             if (symbol == null || symbol.TypeKind == TypeKind.Error)
             {
                 return;
             }
 
-            this.AddSymbolRecursively(symbol);
+            AddSymbolRecursively(symbol);
         }
 
         private void AddSymbolRecursively(ITypeSymbol symbol)
@@ -341,21 +341,21 @@ internal static class CSharpFileScanner
                     var definition = namedType.IsGenericType
                         ? namedType.OriginalDefinition
                         : namedType;
-                    this.AddQualifiedName(definition);
+                    AddQualifiedName(definition);
 
                     foreach (var arg in namedType.TypeArguments)
                     {
-                        this.AddSymbolRecursively(arg);
+                        AddSymbolRecursively(arg);
                     }
 
                     break;
 
                 case IArrayTypeSymbol arrayType:
-                    this.AddSymbolRecursively(arrayType.ElementType);
+                    AddSymbolRecursively(arrayType.ElementType);
                     break;
 
                 case IPointerTypeSymbol pointerType:
-                    this.AddSymbolRecursively(pointerType.PointedAtType);
+                    AddSymbolRecursively(pointerType.PointedAtType);
                     break;
             }
         }
@@ -366,7 +366,7 @@ internal static class CSharpFileScanner
             var qualifiedName = ns.IsGlobalNamespace
                 ? symbol.Name
                 : $"{ns.ToDisplayString()}.{symbol.Name}";
-            this.names.Add(qualifiedName);
+            names.Add(qualifiedName);
         }
     }
 }
