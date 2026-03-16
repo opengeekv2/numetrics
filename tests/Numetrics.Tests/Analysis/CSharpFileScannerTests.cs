@@ -414,18 +414,8 @@ public class CSharpFileScannerTests
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
-    private static string WriteSln(string directory, string projectName, string relativeProjectPath)
-    {
-        var slnPath = Path.Combine(directory, $"{projectName}.sln");
-        var content = $$"""
-            Microsoft Visual Studio Solution File, Format Version 12.00
-            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "{{projectName}}", "{{relativeProjectPath}}", "{00000000-0000-0000-0000-000000000001}"
-            EndProject
-
-            """;
-        File.WriteAllText(slnPath, content);
-        return slnPath;
-    }
+    private static string WriteSln(string directory, string projectName, string relativeProjectPath) =>
+        SolutionTestHelper.WriteSln(directory, projectName, relativeProjectPath);
 
     private static IReadOnlyList<TypeDeclarationInfo> ScanCode(string code, string assemblyName = "TestAssembly")
     {

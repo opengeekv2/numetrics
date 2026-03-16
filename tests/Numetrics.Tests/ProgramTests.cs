@@ -299,7 +299,7 @@ public class ProgramTests
         var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(tempDir);
         var slnPath = Path.Combine(tempDir, "Empty.sln");
-        File.WriteAllText(slnPath, "Microsoft Visual Studio Solution File, Format Version 12.00\r\n");
+        File.WriteAllText(slnPath, $"Microsoft Visual Studio Solution File, Format Version 12.00{Environment.NewLine}");
         return slnPath;
     }
 
@@ -308,18 +308,8 @@ public class ProgramTests
     /// references a single project at the given relative path, and returns the
     /// absolute path to the written <c>.sln</c> file.
     /// </summary>
-    private static string WriteSln(string directory, string projectName, string relativeProjectPath)
-    {
-        var slnPath = Path.Combine(directory, $"{projectName}.sln");
-        var content = $$"""
-            Microsoft Visual Studio Solution File, Format Version 12.00
-            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "{{projectName}}", "{{relativeProjectPath}}", "{00000000-0000-0000-0000-000000000001}"
-            EndProject
-
-            """;
-        File.WriteAllText(slnPath, content);
-        return slnPath;
-    }
+    private static string WriteSln(string directory, string projectName, string relativeProjectPath) =>
+        SolutionTestHelper.WriteSln(directory, projectName, relativeProjectPath);
 
     private static async Task<string> CaptureStdoutAsync(Func<Task<int>> action)
     {
