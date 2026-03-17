@@ -347,7 +347,7 @@ public class CSharpFileScannerTests
             File.WriteAllText(
                 Path.Combine(tempDir, "MyApp.csproj"),
                 "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
-            var slnPath = WriteSln(tempDir, "MyApp", "MyApp.csproj");
+            var slnPath = SolutionTestHelper.WriteSln(tempDir, "MyApp", "MyApp.csproj");
 
             var types = await CSharpFileScanner.LoadSolutionAsync(slnPath);
 
@@ -370,7 +370,7 @@ public class CSharpFileScannerTests
             File.WriteAllText(
                 Path.Combine(tempDir, "MyProject.csproj"),
                 "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
-            var slnPath = WriteSln(tempDir, "MyProject", "MyProject.csproj");
+            var slnPath = SolutionTestHelper.WriteSln(tempDir, "MyProject", "MyProject.csproj");
 
             var types = await CSharpFileScanner.LoadSolutionAsync(slnPath);
 
@@ -400,7 +400,7 @@ public class CSharpFileScannerTests
             File.WriteAllText(
                 Path.Combine(tempDir, "MyApp.csproj"),
                 "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
-            var slnPath = WriteSln(tempDir, "MyApp", "MyApp.csproj");
+            var slnPath = SolutionTestHelper.WriteSln(tempDir, "MyApp", "MyApp.csproj");
 
             var types = await CSharpFileScanner.LoadSolutionAsync(slnPath);
 
@@ -414,9 +414,6 @@ public class CSharpFileScannerTests
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
-    private static string WriteSln(string directory, string projectName, string relativeProjectPath) =>
-        SolutionTestHelper.WriteSln(directory, projectName, relativeProjectPath);
-
     private static IReadOnlyList<TypeDeclarationInfo> ScanCode(string code, string assemblyName = "TestAssembly")
     {
         var tree = CSharpSyntaxTree.ParseText(code);
