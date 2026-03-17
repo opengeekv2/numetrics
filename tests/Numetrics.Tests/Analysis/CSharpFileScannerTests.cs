@@ -498,6 +498,51 @@ public class CSharpFileScannerTests
              .ReferencedTypeNames.ShouldContain("MyApp.ModelA");
     }
 
+    [Fact]
+    public void AnalyzeSyntaxTrees_TypeOfExpressionInCastOperand_TypeCollected()
+    {
+        // The cast target is object (external), but the operand is typeof(ModelA).
+        // The walker must traverse into the cast operand via base.VisitCastExpression
+        // to reach the typeof expression and trigger VisitTypeOfExpression.
+        const string code = """
+            namespace MyApp;
+            class ModelA { }
+            class ServiceA
+            {
+                private object field = (object)typeof(ModelA);
+            }
+            """;
+
+        var types = ScanCode(code);
+
+        types.Single(t => t.Name == "ServiceA")
+             .ReferencedTypeNames.ShouldContain("MyApp.ModelA");
+    }
+
+    [Fact]
+    public void AnalyzeSyntaxTrees_TypeOfExpressionInAttributeArgument_TypeCollected()
+    {
+        // The attribute carries a typeof(ModelA) constructor argument.
+        // The walker must traverse into the attribute argument list via
+        // base.VisitAttribute to reach the typeof expression and trigger
+        // VisitTypeOfExpression.
+        const string code = """
+            namespace MyApp;
+            class ModelA { }
+            class MyAttr : System.Attribute { public MyAttr(System.Type t) { } }
+            class ServiceA
+            {
+                [MyAttr(typeof(ModelA))]
+                public void Foo() { }
+            }
+            """;
+
+        var types = ScanCode(code);
+
+        types.Single(t => t.Name == "ServiceA")
+             .ReferencedTypeNames.ShouldContain("MyApp.ModelA");
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
     private static IReadOnlyList<TypeDeclarationInfo> ScanCode(string code, string assemblyName = "TestAssembly")
     {

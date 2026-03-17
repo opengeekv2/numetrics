@@ -298,6 +298,91 @@ public class ProgramTests
         }
     }
 
+    [Fact]
+    public async Task Main_WithNoArgs_InDirectoryWithNoSolution_WritesErrorMessageToStderr()
+    {
+        // Verifies that the "no solution found" error message is actually written
+        // to stderr (kills statement-removal and string-replacement mutations of
+        // the Console.Error.WriteLine call).
+        var originalDir = Directory.GetCurrentDirectory();
+        var originalError = Console.Error;
+        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            Directory.SetCurrentDirectory(tempDir);
+            var errorWriter = new StringWriter();
+            Console.SetError(errorWriter);
+
+            await Program.Main([]);
+
+            errorWriter.ToString().ShouldContain("solution");
+        }
+        finally
+        {
+            Console.SetError(originalError);
+            Directory.SetCurrentDirectory(originalDir);
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Main_WithNoArgs_InDirectoryWithSingleSlnFile_FindsSolution()
+    {
+        // FindSolutionFile must return the path of the single .sln candidate so
+        // that execution continues past the null-check.  The directory also
+        // contains a non-solution file (Dummy.txt) so that the "*.sln" → "" string
+        // mutation causes GetFiles("") to return >1 file and invalidate the result.
+        var originalDir = Directory.GetCurrentDirectory();
+        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            Directory.SetCurrentDirectory(tempDir);
+            File.WriteAllText(
+                Path.Combine(tempDir, "Empty.sln"),
+                $"Microsoft Visual Studio Solution File, Format Version 12.00{Environment.NewLine}");
+            File.WriteAllText(Path.Combine(tempDir, "Dummy.txt"), string.Empty);
+
+            var output = await CaptureStdoutAsync(() => Program.Main([]));
+
+            // The solution was found and loaded (no projects → "No C# types found").
+            output.ShouldContain("No C# types found");
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(originalDir);
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Main_WithNoArgs_InDirectoryWithSingleSlnxFile_FindsSolution()
+    {
+        // FindSolutionFile must include .slnx files via Concat (not Except).
+        // The directory also contains a non-solution file (Dummy.txt) so that the
+        // "*.slnx" → "" string mutation causes GetFiles("") to return >1 file.
+        var originalDir = Directory.GetCurrentDirectory();
+        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            Directory.SetCurrentDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, "Empty.slnx"), "<Solution />");
+            File.WriteAllText(Path.Combine(tempDir, "Dummy.txt"), string.Empty);
+
+            var output = await CaptureStdoutAsync(() => Program.Main([]));
+
+            // The solution was found and loaded (no projects → "No C# types found").
+            output.ShouldContain("No C# types found");
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(originalDir);
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     /// <summary>
