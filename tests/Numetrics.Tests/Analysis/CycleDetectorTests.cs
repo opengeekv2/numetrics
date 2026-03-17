@@ -166,4 +166,26 @@ public class CycleDetectorTests
 
         cycles.Count.ShouldBe(2);
     }
+
+    [Fact]
+    public void DetectCycles_DeadEndBranchBeforeCycleEdge_CycleDoesNotIncludeDeadEndNode()
+    {
+        // A → B (dead end, "B" < "C" so SortedSet iterates it first)
+        // A → C → A (the actual cycle: [A, C])
+        // Without the path.RemoveAt backtracking step, the dead-end node "B" stays
+        // in the path when "C" is visited and leaks into the reported cycle.
+        var dependencies = new Dictionary<string, IReadOnlySet<string>>
+        {
+            ["A"] = new SortedSet<string> { "B", "C" }, // deterministic order: B before C
+            ["B"] = new SortedSet<string>(),
+            ["C"] = new SortedSet<string> { "A" },
+        };
+
+        var cycles = CycleDetector.DetectCycles(dependencies);
+
+        cycles.ShouldHaveSingleItem();
+        cycles[0].ShouldContain("A");
+        cycles[0].ShouldContain("C");
+        cycles[0].ShouldNotContain("B");
+    }
 }

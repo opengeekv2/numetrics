@@ -273,6 +273,31 @@ public class ProgramTests
         }
     }
 
+    [Fact]
+    public async Task Main_WithNoArgs_InDirectoryWithNoSolution_ReturnsOne()
+    {
+        // When called with no arguments, Main falls back to FindSolutionFile in
+        // the current directory.  In a directory with no solution file it must
+        // return 1 (and NOT throw an IndexOutOfRangeException from accessing
+        // args[0] when args is empty).
+        var originalDir = Directory.GetCurrentDirectory();
+        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            Directory.SetCurrentDirectory(tempDir);
+
+            var result = await Program.Main([]);
+
+            result.ShouldBe(1);
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(originalDir);
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     /// <summary>

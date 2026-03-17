@@ -413,6 +413,91 @@ public class CSharpFileScannerTests
         }
     }
 
+    [Fact]
+    public void AnalyzeSyntaxTrees_GlobalNamespaceTypeReference_StoredAsSimpleName()
+    {
+        // ModelA has no namespace (global namespace).  The collected reference name
+        // must be "ModelA", not ".ModelA" (which would happen if the namespace
+        // display string were always prepended, even for the global namespace).
+        const string code = """
+            class ModelA { }
+            class ServiceA
+            {
+                private ModelA field;
+            }
+            """;
+
+        var types = ScanCode(code);
+
+        types.Single(t => t.Name == "ServiceA")
+             .ReferencedTypeNames.ShouldContain("ModelA");
+    }
+
+    [Fact]
+    public void AnalyzeSyntaxTrees_CastExpressionInVariableInitializer_TypeCollected()
+    {
+        // The declared field type is object, but the initializer casts to ModelA.
+        // The walker must traverse into the variable initializer via
+        // base.VisitVariableDeclaration to reach the cast expression and
+        // trigger VisitCastExpression.
+        const string code = """
+            namespace MyApp;
+            class ModelA { }
+            class ServiceA
+            {
+                private object field = (ModelA)null;
+            }
+            """;
+
+        var types = ScanCode(code);
+
+        types.Single(t => t.Name == "ServiceA")
+             .ReferencedTypeNames.ShouldContain("MyApp.ModelA");
+    }
+
+    [Fact]
+    public void AnalyzeSyntaxTrees_AttributeOnMethodParameter_TypeCollected()
+    {
+        // The parameter carries an attribute whose class is in the same namespace.
+        // The walker must traverse into the parameter's attribute list via
+        // base.VisitParameter to discover MyParamAttr.
+        const string code = """
+            namespace MyApp;
+            [System.AttributeUsage(System.AttributeTargets.Parameter)]
+            class MyParamAttr : System.Attribute { }
+            class ServiceA
+            {
+                public void Process([MyParamAttr] int x) { }
+            }
+            """;
+
+        var types = ScanCode(code);
+
+        types.Single(t => t.Name == "ServiceA")
+             .ReferencedTypeNames.ShouldContain("MyApp.MyParamAttr");
+    }
+
+    [Fact]
+    public void AnalyzeSyntaxTrees_CastExpressionInPrimaryConstructorBaseArg_TypeCollected()
+    {
+        // ServiceA's primary constructor passes "(ModelA)null" to its base.
+        // The walker must traverse into the base-list constructor argument via
+        // base.VisitBaseList to reach the cast expression and trigger
+        // VisitCastExpression.
+        const string code = """
+            namespace MyApp;
+            class ModelA { }
+            class Base(object arg) { }
+            class ServiceA() : Base((ModelA)null) { }
+            """;
+
+        var tree = CSharpSyntaxTree.ParseText(code, new CSharpParseOptions(LanguageVersion.CSharp12));
+        var types = CSharpFileScanner.AnalyzeSyntaxTrees([(tree, "TestAssembly")]);
+
+        types.Single(t => t.Name == "ServiceA")
+             .ReferencedTypeNames.ShouldContain("MyApp.ModelA");
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
     private static IReadOnlyList<TypeDeclarationInfo> ScanCode(string code, string assemblyName = "TestAssembly")
     {

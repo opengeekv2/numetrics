@@ -249,6 +249,25 @@ public class MetricsCalculatorTests
         hub.Instability.ShouldBe(2.0 / 3.0, tolerance: 1e-10);
     }
 
+    [Fact]
+    public void ComputeNamespaceMetrics_GlobalNamespaceTypeReferenced_CouplingCounted()
+    {
+        // GlobalType has an empty namespace (global namespace).  Its key in the
+        // type map must be just "GlobalType", not ".GlobalType", so that the
+        // reference from ServiceA resolves correctly and the efferent coupling
+        // from "MyApp" to the global namespace is counted.
+        var types = new[]
+        {
+            MakeType("ServiceA", "MyApp", "Asm", refs: new[] { "GlobalType" }),
+            MakeType("GlobalType", string.Empty, "Asm"),
+        };
+
+        var metrics = MetricsCalculator.ComputeNamespaceMetrics(types);
+
+        var myApp = metrics.Single(m => m.Name == "MyApp");
+        myApp.EfferentCouplings.ShouldBe(1);
+    }
+
     private static TypeDeclarationInfo MakeType(
         string name,
         string ns,

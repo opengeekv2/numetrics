@@ -80,12 +80,9 @@ internal static class Program
             Console.WriteLine(
                 $"{m.Name,-50} {m.TypeCount,4} {m.AfferentCouplings,4} {m.EfferentCouplings,4} {m.Abstractness,6:F2} {m.Instability,6:F2} {m.Distance,6:F2}");
 
-            if (m.Cycles.Count > 0)
+            foreach (var cycle in m.Cycles)
             {
-                foreach (var cycle in m.Cycles)
-                {
-                    Console.WriteLine($"  [cycle] {string.Join(" -> ", cycle)}");
-                }
+                Console.WriteLine($"  [cycle] {string.Join(" -> ", cycle)}");
             }
         }
     }
