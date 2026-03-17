@@ -28,4 +28,4 @@ jobs:
         run: dotnet build --no-restore
 
       - name: Run numetrics on src
-        run: dotnet run --project src/Numetrics/Numetrics.csproj --no-build -- src/
+        run: dotnet run --project src/Numetrics/Numetrics.csproj --no-build -- Numetrics.slnx

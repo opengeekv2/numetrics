@@ -39,7 +39,7 @@ internal static class CSharpFileScanner
 
     /// <summary>
     /// Builds a <see cref="CSharpCompilation"/> from the provided raw syntax trees
-    /// and analyses each tree.  This path is used by unit tests that supply
+    /// and analyzes each tree.  This path is used by unit tests that supply
     /// in-memory source code without going through the MSBuild workspace.
     /// </summary>
     internal static IReadOnlyList<TypeDeclarationInfo> AnalyzeSyntaxTrees(

@@ -78,7 +78,7 @@ public class ProgramTests
             File.WriteAllText(
                 Path.Combine(tempDir, "Test.csproj"),
                 "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
-            var slnPath = WriteSln(tempDir, "Test", "Test.csproj");
+            var slnPath = SolutionTestHelper.WriteSln(tempDir, "Test", "Test.csproj");
 
             var output = await CaptureStdoutAsync(() => Program.Main([slnPath]));
 
@@ -177,7 +177,7 @@ public class ProgramTests
             File.WriteAllText(
                 Path.Combine(tempDir, "T.csproj"),
                 "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
-            var slnPath = WriteSln(tempDir, "T", "T.csproj");
+            var slnPath = SolutionTestHelper.WriteSln(tempDir, "T", "T.csproj");
 
             var output = await CaptureStdoutAsync(() => Program.Main([slnPath]));
 
@@ -260,7 +260,7 @@ public class ProgramTests
             File.WriteAllText(
                 Path.Combine(tempDir, "Test.csproj"),
                 "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
-            var slnPath = WriteSln(tempDir, "Test", "Test.csproj");
+            var slnPath = SolutionTestHelper.WriteSln(tempDir, "Test", "Test.csproj");
 
             var output = await CaptureStdoutAsync(() => Program.Main([slnPath]));
 
@@ -287,7 +287,7 @@ public class ProgramTests
         File.WriteAllText(
             Path.Combine(tempDir, "MyProject.csproj"),
             "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
-        return WriteSln(tempDir, "MyProject", "MyProject.csproj");
+        return SolutionTestHelper.WriteSln(tempDir, "MyProject", "MyProject.csproj");
     }
 
     /// <summary>
@@ -302,14 +302,6 @@ public class ProgramTests
         File.WriteAllText(slnPath, $"Microsoft Visual Studio Solution File, Format Version 12.00{Environment.NewLine}");
         return slnPath;
     }
-
-    /// <summary>
-    /// Writes a minimal <c>.sln</c> file into <paramref name="directory"/> that
-    /// references a single project at the given relative path, and returns the
-    /// absolute path to the written <c>.sln</c> file.
-    /// </summary>
-    private static string WriteSln(string directory, string projectName, string relativeProjectPath) =>
-        SolutionTestHelper.WriteSln(directory, projectName, relativeProjectPath);
 
     private static async Task<string> CaptureStdoutAsync(Func<Task<int>> action)
     {
