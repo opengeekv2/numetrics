@@ -82,7 +82,7 @@ internal static class MetricsCalculator
             var ce = efferentDeps.TryGetValue(key, out var effs) ? effs.Count : 0;
             var ca = afferentDeps.TryGetValue(key, out var affs) ? affs.Count : 0;
 
-            var abstractness = typeCount > 0 ? (double)abstractCount / typeCount : 0.0;
+            var abstractness = (double)abstractCount / typeCount;
             var instability = ((ce + ca) > 0) ? ((double)ce / (ce + ca)) : 0.0;
             var distance = Math.Abs(abstractness + instability - 1.0);
 

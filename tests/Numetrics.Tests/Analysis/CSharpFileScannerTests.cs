@@ -336,7 +336,7 @@ public class CSharpFileScannerTests
     }
 
     [Fact]
-    public void ScanDirectory_OnlyFindsCSFiles_IgnoresOtherExtensions()
+    public async Task LoadSolutionAsync_OnlyFindsCSFiles_IgnoresOtherExtensions()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(tempDir);
@@ -344,8 +344,12 @@ public class CSharpFileScannerTests
         {
             File.WriteAllText(Path.Combine(tempDir, "Valid.cs"), "namespace MyApp; class MyType { }");
             File.WriteAllText(Path.Combine(tempDir, "Other.txt"), "namespace OtherApp; class OtherType { }");
+            File.WriteAllText(
+                Path.Combine(tempDir, "MyApp.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
+            var slnPath = SolutionTestHelper.WriteSln(tempDir, "MyApp", "MyApp.csproj");
 
-            var types = CSharpFileScanner.ScanDirectory(tempDir);
+            var types = await CSharpFileScanner.LoadSolutionAsync(slnPath);
 
             types.ShouldHaveSingleItem().Name.ShouldBe("MyType");
         }
@@ -356,19 +360,19 @@ public class CSharpFileScannerTests
     }
 
     [Fact]
-    public void ScanDirectory_ReadsAssemblyNameFromCsprojFile()
+    public async Task LoadSolutionAsync_ReadsAssemblyNameFromProject()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-        var projectDir = Path.Combine(tempDir, "MyProject");
-        Directory.CreateDirectory(projectDir);
+        Directory.CreateDirectory(tempDir);
         try
         {
-            File.WriteAllText(Path.Combine(projectDir, "Code.cs"), "namespace MyApp; class MyType { }");
+            File.WriteAllText(Path.Combine(tempDir, "Code.cs"), "namespace MyApp; class MyType { }");
             File.WriteAllText(
-                Path.Combine(projectDir, "MyProject.csproj"),
+                Path.Combine(tempDir, "MyProject.csproj"),
                 "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
+            var slnPath = SolutionTestHelper.WriteSln(tempDir, "MyProject", "MyProject.csproj");
 
-            var types = CSharpFileScanner.ScanDirectory(tempDir);
+            var types = await CSharpFileScanner.LoadSolutionAsync(slnPath);
 
             types.ShouldHaveSingleItem().AssemblyName.ShouldBe("MyProject");
         }
@@ -378,6 +382,168 @@ public class CSharpFileScannerTests
         }
     }
 
+    [Fact]
+    public async Task LoadSolutionAsync_CrossFileFieldReference_TypeNameResolved()
+    {
+        // Both files are in the same project so the workspace compilation resolves
+        // "MyApp.Models.ModelA" from ServiceA.cs to its fully-qualified name.
+        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(tempDir, "ModelA.cs"),
+                "namespace MyApp.Models; class ModelA { }");
+            File.WriteAllText(
+                Path.Combine(tempDir, "ServiceA.cs"),
+                "namespace MyApp.Services; class ServiceA { private MyApp.Models.ModelA field; }");
+            File.WriteAllText(
+                Path.Combine(tempDir, "MyApp.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
+            var slnPath = SolutionTestHelper.WriteSln(tempDir, "MyApp", "MyApp.csproj");
+
+            var types = await CSharpFileScanner.LoadSolutionAsync(slnPath);
+
+            types.Single(t => t.Name == "ServiceA")
+                 .ReferencedTypeNames.ShouldContain("MyApp.Models.ModelA");
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void AnalyzeSyntaxTrees_GlobalNamespaceTypeReference_StoredAsSimpleName()
+    {
+        // ModelA has no namespace (global namespace).  The collected reference name
+        // must be "ModelA", not ".ModelA" (which would happen if the namespace
+        // display string were always prepended, even for the global namespace).
+        const string code = """
+            class ModelA { }
+            class ServiceA
+            {
+                private ModelA field;
+            }
+            """;
+
+        var types = ScanCode(code);
+
+        types.Single(t => t.Name == "ServiceA")
+             .ReferencedTypeNames.ShouldContain("ModelA");
+    }
+
+    [Fact]
+    public void AnalyzeSyntaxTrees_CastExpressionInVariableInitializer_TypeCollected()
+    {
+        // The declared field type is object, but the initializer casts to ModelA.
+        // The walker must traverse into the variable initializer via
+        // base.VisitVariableDeclaration to reach the cast expression and
+        // trigger VisitCastExpression.
+        const string code = """
+            namespace MyApp;
+            class ModelA { }
+            class ServiceA
+            {
+                private object field = (ModelA)null;
+            }
+            """;
+
+        var types = ScanCode(code);
+
+        types.Single(t => t.Name == "ServiceA")
+             .ReferencedTypeNames.ShouldContain("MyApp.ModelA");
+    }
+
+    [Fact]
+    public void AnalyzeSyntaxTrees_AttributeOnMethodParameter_TypeCollected()
+    {
+        // The parameter carries an attribute whose class is in the same namespace.
+        // The walker must traverse into the parameter's attribute list via
+        // base.VisitParameter to discover MyParamAttr.
+        const string code = """
+            namespace MyApp;
+            [System.AttributeUsage(System.AttributeTargets.Parameter)]
+            class MyParamAttr : System.Attribute { }
+            class ServiceA
+            {
+                public void Process([MyParamAttr] int x) { }
+            }
+            """;
+
+        var types = ScanCode(code);
+
+        types.Single(t => t.Name == "ServiceA")
+             .ReferencedTypeNames.ShouldContain("MyApp.MyParamAttr");
+    }
+
+    [Fact]
+    public void AnalyzeSyntaxTrees_CastExpressionInPrimaryConstructorBaseArg_TypeCollected()
+    {
+        // ServiceA's primary constructor passes "(ModelA)null" to its base.
+        // The walker must traverse into the base-list constructor argument via
+        // base.VisitBaseList to reach the cast expression and trigger
+        // VisitCastExpression.
+        const string code = """
+            namespace MyApp;
+            class ModelA { }
+            class Base(object arg) { }
+            class ServiceA() : Base((ModelA)null) { }
+            """;
+
+        var tree = CSharpSyntaxTree.ParseText(code, new CSharpParseOptions(LanguageVersion.CSharp12));
+        var types = CSharpFileScanner.AnalyzeSyntaxTrees([(tree, "TestAssembly")]);
+
+        types.Single(t => t.Name == "ServiceA")
+             .ReferencedTypeNames.ShouldContain("MyApp.ModelA");
+    }
+
+    [Fact]
+    public void AnalyzeSyntaxTrees_TypeOfExpressionInCastOperand_TypeCollected()
+    {
+        // The cast target is object (external), but the operand is typeof(ModelA).
+        // The walker must traverse into the cast operand via base.VisitCastExpression
+        // to reach the typeof expression and trigger VisitTypeOfExpression.
+        const string code = """
+            namespace MyApp;
+            class ModelA { }
+            class ServiceA
+            {
+                private object field = (object)typeof(ModelA);
+            }
+            """;
+
+        var types = ScanCode(code);
+
+        types.Single(t => t.Name == "ServiceA")
+             .ReferencedTypeNames.ShouldContain("MyApp.ModelA");
+    }
+
+    [Fact]
+    public void AnalyzeSyntaxTrees_TypeOfExpressionInAttributeArgument_TypeCollected()
+    {
+        // The attribute carries a typeof(ModelA) constructor argument.
+        // The walker must traverse into the attribute argument list via
+        // base.VisitAttribute to reach the typeof expression and trigger
+        // VisitTypeOfExpression.
+        const string code = """
+            namespace MyApp;
+            class ModelA { }
+            class MyAttr : System.Attribute { public MyAttr(System.Type t) { } }
+            class ServiceA
+            {
+                [MyAttr(typeof(ModelA))]
+                public void Foo() { }
+            }
+            """;
+
+        var types = ScanCode(code);
+
+        types.Single(t => t.Name == "ServiceA")
+             .ReferencedTypeNames.ShouldContain("MyApp.ModelA");
+    }
+
+    // ── helpers ──────────────────────────────────────────────────────────────
     private static IReadOnlyList<TypeDeclarationInfo> ScanCode(string code, string assemblyName = "TestAssembly")
     {
         var tree = CSharpSyntaxTree.ParseText(code);

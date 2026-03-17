@@ -1,24 +1,48 @@
+using System.Runtime.CompilerServices;
+using Microsoft.Build.Locator;
 using Numetrics.Analysis;
 
 namespace Numetrics;
 
 internal static class Program
 {
-    internal static int Main(string[] args)
+    internal static async Task<int> Main(string[] args)
     {
-        var path = args.Length > 0 ? args[0] : Directory.GetCurrentDirectory();
-
-        if (!Directory.Exists(path))
+        // MSBuildLocator.RegisterDefaults() MUST be called before any MSBuild
+        // types are loaded by the JIT.  Keeping it as the very first statement
+        // and delegating all workspace work to a NoInlining method prevents the
+        // JIT from pre-loading MSBuild assemblies before the locator can redirect
+        // their resolution.
+        if (!MSBuildLocator.IsRegistered)
         {
-            Console.Error.WriteLine($"Error: directory not found: {path}");
+            MSBuildLocator.RegisterDefaults();
+        }
+
+        return await RunAsync(args).ConfigureAwait(false);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<int> RunAsync(string[] args)
+    {
+        var solutionPath = args.Length > 0 ? args[0] : FindSolutionFile(Directory.GetCurrentDirectory());
+
+        if (solutionPath == null)
+        {
+            Console.Error.WriteLine("Error: no .sln or .slnx solution file found in the current directory.");
             return 1;
         }
 
-        var types = CSharpFileScanner.ScanDirectory(path);
+        if (!File.Exists(solutionPath))
+        {
+            Console.Error.WriteLine($"Error: solution file not found: {solutionPath}");
+            return 1;
+        }
+
+        var types = await CSharpFileScanner.LoadSolutionAsync(solutionPath).ConfigureAwait(false);
 
         if (types.Count == 0)
         {
-            Console.WriteLine("No C# types found in the specified path.");
+            Console.WriteLine("No C# types found in the specified solution.");
             return 0;
         }
 
@@ -35,6 +59,15 @@ internal static class Program
         return 0;
     }
 
+    private static string? FindSolutionFile(string directory)
+    {
+        var candidates = Directory.GetFiles(directory, "*.sln")
+            .Concat(Directory.GetFiles(directory, "*.slnx"))
+            .ToArray();
+
+        return candidates.Length == 1 ? candidates[0] : null;
+    }
+
     private static void PrintMetricsTable(IReadOnlyList<PackageMetrics> metrics)
     {
         var sorted = metrics.OrderBy(m => m.Name).ToList();
@@ -47,12 +80,9 @@ internal static class Program
             Console.WriteLine(
                 $"{m.Name,-50} {m.TypeCount,4} {m.AfferentCouplings,4} {m.EfferentCouplings,4} {m.Abstractness,6:F2} {m.Instability,6:F2} {m.Distance,6:F2}");
 
-            if (m.Cycles.Count > 0)
+            foreach (var cycle in m.Cycles)
             {
-                foreach (var cycle in m.Cycles)
-                {
-                    Console.WriteLine($"  [cycle] {string.Join(" -> ", cycle)}");
-                }
+                Console.WriteLine($"  [cycle] {string.Join(" -> ", cycle)}");
             }
         }
     }
